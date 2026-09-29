@@ -32,11 +32,11 @@ func SelectAria2Instance(instances []Aria2Snapshot) (Aria2Snapshot, error) {
 		if weight <= 0 {
 			weight = 1
 		}
-		load := (float64(in.Active) + 0.5*float64(in.Waiting)) / float64(in.MaxActive)
-		candidates = append(candidates, candidate{
-			instance: in,
-			score:    load / weight,
-		})
+		// +1 gives weight/capacity a meaningful preference even when an
+		// instance is idle. Otherwise every idle instance would score zero.
+		score := (float64(in.Active) + 0.5*float64(in.Waiting) + 1) /
+			(float64(in.MaxActive) * weight)
+		candidates = append(candidates, candidate{instance: in, score: score})
 	}
 	if len(candidates) == 0 {
 		return Aria2Snapshot{}, ErrNoAria2Instance
