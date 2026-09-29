@@ -12,7 +12,8 @@ const (
 	ErrorKindAuth    ErrorKind = "auth"
 	ErrorKindCaptcha ErrorKind = "captcha"
 	ErrorKindQuota   ErrorKind = "quota"
-	ErrorKindStorage ErrorKind = "storage"
+	ErrorKindStorage  ErrorKind = "storage"
+	ErrorKindNotFound ErrorKind = "not_found"
 	ErrorKindAPI     ErrorKind = "api"
 )
 
@@ -54,6 +55,8 @@ func classifyAPIError(op string, code int64, httpStatus int, message string) err
 	lower := strings.ToLower(message)
 	kind := ErrorKindAPI
 	switch {
+	case httpStatus == 404 || strings.Contains(lower, "not found") || strings.Contains(lower, "not_found"):
+		kind = ErrorKindNotFound
 	case code == 4121 || code == 4122 || code == 16 || httpStatus == 401:
 		kind = ErrorKindAuth
 	case code == 9 || strings.Contains(lower, "captcha"):

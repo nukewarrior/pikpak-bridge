@@ -113,6 +113,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.Aria2.StatusInterval == "" {
 		cfg.Aria2.StatusInterval = "5s"
 	}
+	if cfg.Cleanup.Delay == "" {
+		cfg.Cleanup.Delay = "60s"
+	}
 	if cfg.Scheduler.Aria2Affinity == "" {
 		cfg.Scheduler.Aria2Affinity = "task"
 	}
@@ -137,6 +140,9 @@ func applyDefaults(cfg *Config) {
 }
 
 func validate(cfg *Config) error {
+	if cfg.Cleanup.Enabled && !cfg.Cleanup.Permanent {
+		return fmt.Errorf("cleanup.enabled requires cleanup.permanent=true")
+	}
 	if cfg.Scheduler.Aria2Affinity != "task" && cfg.Scheduler.Aria2Affinity != "file" {
 		return fmt.Errorf("scheduler.aria2_affinity must be task or file")
 	}

@@ -68,6 +68,15 @@ func main() {
 		slog.Warn("no aria2 instances configured; completed PikPak tasks will wait")
 	}
 
+	if len(cfg.PikPak.Accounts) > 0 {
+		finalizer, err := buildFinalizer(cfg, db, provider)
+		if err != nil {
+			slog.Error("configure finalizer", "error", err)
+			os.Exit(1)
+		}
+		go finalizer.Run(ctx)
+	}
+
 	api := httpapi.New(db)
 	server := &http.Server{
 		Addr:              cfg.Server.Listen,
@@ -159,5 +168,28 @@ func buildAria2Worker(cfg *config.Config, db *store.SQLite, provider pikpak.Prov
 		StatusInterval: statusInterval,
 		RetryInterval:  retryInterval,
 		MaxRetry:       cfg.Scheduler.MaxRetry,
+	}), nil
+}
+
+func buildFinalizer(cfg *config.Config, db *store.SQLite, provider pikpak.Provider) (*worker.Finalizer, error) {
+	workerInterval, err := time.ParseDuration(cfg.Scheduler.WorkerInterval)
+	if err != nil {
+		return nil, err
+	}
+	retryInterval, err := time.ParseDuration(cfg.Scheduler.RetryInterval)
+	if err != nil {
+		return nil, err
+	}
+	cleanupDelay, err := time.ParseDuration(cfg.Cleanup.Delay)
+	if err != nil {
+		return nil, err
+	}
+	return worker.NewFinalizer(db, provider, worker.FinalizeOptions{
+		WorkerInterval: workerInterval,
+		RetryInterval:  retryInterval,
+		MaxRetry:       cfg.Scheduler.MaxRetry,
+		VerifySize:     cfg.Cleanup.VerifySize,
+		CleanupEnabled: cfg.Cleanup.Enabled,
+		CleanupDelay:   cleanupDelay,
 	}), nil
 }

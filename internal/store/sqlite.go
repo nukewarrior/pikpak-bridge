@@ -366,6 +366,31 @@ func (s *SQLite) ListRemoteFiles(ctx context.Context, taskID string) ([]domain.R
 }
 
 
+
+func (s *SQLite) ListFinalizeWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT "+taskColumns+`
+		FROM tasks
+		WHERE status IN (?, ?, ?)
+		  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+		ORDER BY created_at ASC
+		LIMIT ?`,
+		string(domain.TaskVerifying),
+		string(domain.TaskReadyToCleanup),
+		string(domain.TaskPikPakDeleting),
+		now.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+
 func (s *SQLite) ListAria2Work(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100

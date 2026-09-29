@@ -32,6 +32,9 @@ func TestClassifyAPIError(t *testing.T) {
 	if got := KindOf(classifyAPIError("x", 0, 200, "storage space full")); got != ErrorKindStorage {
 		t.Fatalf("want storage, got %s", got)
 	}
+	if got := KindOf(classifyAPIError("x", 0, 404, "not found")); got != ErrorKindNotFound {
+		t.Fatalf("want not_found, got %s", got)
+	}
 }
 
 func TestPickDownloadURL(t *testing.T) {
