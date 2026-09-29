@@ -27,11 +27,12 @@ type DatabaseConfig struct {
 }
 
 type PikPakConfig struct {
-	QuotaRefresh     string          `yaml:"quota_refresh"`
-	StatusInterval   string          `yaml:"status_interval"`
-	MinFreeSpace     string          `yaml:"min_free_space"`
-	MaxJobsPerAccount int            `yaml:"max_jobs_per_account"`
-	Accounts         []PikPakAccount `yaml:"accounts"`
+	SessionDir        string          `yaml:"session_dir"`
+	QuotaRefresh      string          `yaml:"quota_refresh"`
+	StatusInterval    string          `yaml:"status_interval"`
+	MinFreeSpace      string          `yaml:"min_free_space"`
+	MaxJobsPerAccount int             `yaml:"max_jobs_per_account"`
+	Accounts          []PikPakAccount `yaml:"accounts"`
 }
 
 type PikPakAccount struct {
@@ -47,13 +48,13 @@ type Aria2Config struct {
 }
 
 type Aria2Instance struct {
-	Name      string `yaml:"name"`
-	URL       string `yaml:"url"`
-	Secret    string `yaml:"secret"`
-	Dir       string `yaml:"dir"`
-	MaxActive int    `yaml:"max_active"`
+	Name      string  `yaml:"name"`
+	URL       string  `yaml:"url"`
+	Secret    string  `yaml:"secret"`
+	Dir       string  `yaml:"dir"`
+	MaxActive int     `yaml:"max_active"`
 	Weight    float64 `yaml:"weight"`
-	Enabled   *bool  `yaml:"enabled,omitempty"`
+	Enabled   *bool   `yaml:"enabled,omitempty"`
 }
 
 type SchedulerConfig struct {
@@ -93,6 +94,9 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Database.Path == "" {
 		cfg.Database.Path = "/data/pikpak-bridge.db"
+	}
+	if cfg.PikPak.SessionDir == "" {
+		cfg.PikPak.SessionDir = "/data/sessions"
 	}
 	if cfg.Scheduler.Aria2Affinity == "" {
 		cfg.Scheduler.Aria2Affinity = "task"
