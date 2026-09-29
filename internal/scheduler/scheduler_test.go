@@ -38,3 +38,14 @@ func TestSelectAria2Instance(t *testing.T) {
 		t.Fatalf("want vps because it is idle, got %s", got.Name)
 	}
 }
+
+func TestSelectPikPakAccountRejectsInsufficientSpace(t *testing.T) {
+	now := time.Now()
+	accounts := []pikpak.AccountSnapshot{
+		{Name: "full", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 0},
+		{Name: "small", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 1024},
+	}
+	if _, err := SelectPikPakAccount(accounts, 2048, now); err != ErrNoPikPakAccount {
+		t.Fatalf("want ErrNoPikPakAccount, got %v", err)
+	}
+}

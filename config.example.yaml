@@ -37,8 +37,11 @@ aria2:
 
 scheduler:
   aria2_affinity: task
+  worker_interval: 2s
   retry_interval: 30s
   max_retry: 10
+  account_failure_threshold: 3
+  account_cooldown: 30m
 
 cleanup:
   enabled: true

@@ -35,6 +35,9 @@ func NewManager(accounts []config.PikPakAccount, sessionDir string, maxJobs int)
 	}
 	for _, account := range accounts {
 		enabled := account.Enabled == nil || *account.Enabled
+		enabled = enabled &&
+			strings.TrimSpace(account.Username) != "" &&
+			strings.TrimSpace(account.Password) != ""
 		m.accounts[account.Name] = &managedAccount{
 			name:    account.Name,
 			enabled: enabled,
@@ -136,6 +139,21 @@ func (m *Manager) SubmitOffline(ctx context.Context, account, source string) (Of
 	if err := entry.client.Login(ctx); err != nil {
 		return OfflineTask{}, err
 	}
+
+	// A bridge process can crash after PikPak accepted the request but before
+	// the remote task ID was persisted. Re-check existing tasks by the exact
+	// submitted source before creating a new one so restart recovery does not
+	// consume another offline-download quota slot.
+	tasks, err := entry.client.OfflineTasks(ctx)
+	if err != nil {
+		return OfflineTask{}, fmt.Errorf("check existing offline tasks before submit: %w", err)
+	}
+	if existing, ok := findOfflineTaskBySource(tasks, source); ok {
+		result := mapOfflineTask(existing)
+		result.Existing = true
+		return result, nil
+	}
+
 	task, err := entry.client.CreateOfflineTask(ctx, source)
 	if err != nil {
 		return OfflineTask{}, err
@@ -144,6 +162,16 @@ func (m *Manager) SubmitOffline(ctx context.Context, account, source string) (Of
 	m.lastUsed[account] = time.Now().UTC()
 	m.mu.Unlock()
 	return mapOfflineTask(task), nil
+}
+
+func findOfflineTaskBySource(tasks []offlineTaskAPI, source string) (offlineTaskAPI, bool) {
+	source = strings.TrimSpace(source)
+	for _, task := range tasks {
+		if strings.TrimSpace(task.Params.URL) == source {
+			return task, true
+		}
+	}
+	return offlineTaskAPI{}, false
 }
 
 func (m *Manager) GetOfflineTask(ctx context.Context, account, taskID string) (OfflineTask, error) {
