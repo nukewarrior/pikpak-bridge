@@ -28,22 +28,41 @@ The design is intentionally built around multi-account PikPak quota scheduling, 
 
 ## Current status
 
-This repository is in active development.
+The core v1 pipeline is implemented:
 
-The first foundation includes:
+- multi-account PikPak scheduling with quota/storage checks
+- durable offline-task state machine and restart recovery
+- multi-instance aria2 scheduling with task affinity
+- persistent per-file aria2 progress and deterministic GID recovery
+- final size verification and precise PikPak cleanup
+- embedded Web UI
+- Docker/Compose deployment and multi-architecture GHCR images
 
-- Go service layout
-- YAML configuration with environment-variable expansion
-- SQLite task persistence
-- task submission/query HTTP API
-- magnet/BTIH/HTTP/HTTPS/ED2K source normalization and duplicate detection
-- PikPak provider interface
-- aria2 JSON-RPC client
-- pure/testable PikPak account selector
-- pure/testable aria2 instance selector
-- Docker and CI scaffolding
+## Docker image
 
-The PikPak private-API adapter and background state-machine workers are the next implementation stage.
+Prebuilt multi-architecture images are published to GitHub Container Registry:
+
+~~~text
+ghcr.io/nukewarrior/pikpak-bridge:latest
+~~~
+
+Supported platforms:
+
+- linux/amd64
+- linux/arm64
+
+Each master build also publishes a commit-pinned `sha-xxxxxxx` tag. Git tags such as `v0.1.0` are published with the same image tag.
+
+Start with the included Compose file:
+
+~~~bash
+cp config.example.yaml config.yaml
+# edit config.yaml and/or export the referenced environment variables
+docker compose pull
+docker compose up -d
+~~~
+
+Then open `http://<host>:8080/`.
 
 ## Web UI
 

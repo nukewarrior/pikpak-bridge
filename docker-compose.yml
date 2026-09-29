@@ -1,6 +1,6 @@
 services:
   pikpak-bridge:
-    build: .
+    image: ghcr.io/nukewarrior/pikpak-bridge:latest
     container_name: pikpak-bridge
     restart: unless-stopped
     ports:
