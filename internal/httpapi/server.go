@@ -5,9 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -75,12 +75,12 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createTaskText(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
-	var req strings.Builder
-	if _, err := req.ReadFrom(http.MaxBytesReader(w, r.Body, 64<<10)); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	s.createFromSource(w, r, req.String())
+	s.createFromSource(w, r, string(body))
 }
 
 func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input string) {
