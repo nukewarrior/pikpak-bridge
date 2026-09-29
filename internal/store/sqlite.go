@@ -93,6 +93,26 @@ func (s *SQLite) init(ctx context.Context) error {
 			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_files_task_id ON remote_files(task_id);`,
+		`CREATE TABLE IF NOT EXISTS downloads (
+			task_id TEXT NOT NULL,
+			pikpak_file_id TEXT NOT NULL,
+			aria2_instance TEXT NOT NULL,
+			aria2_gid TEXT NOT NULL,
+			status TEXT NOT NULL,
+			relative_path TEXT NOT NULL,
+			expected_size INTEGER NOT NULL DEFAULT 0,
+			total_length INTEGER NOT NULL DEFAULT 0,
+			completed_length INTEGER NOT NULL DEFAULT 0,
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			next_attempt_at TEXT,
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(task_id, pikpak_file_id),
+			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_downloads_task_id ON downloads(task_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status, next_attempt_at);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -344,6 +364,187 @@ func (s *SQLite) ListRemoteFiles(ctx context.Context, taskID string) ([]domain.R
 	}
 	return out, rows.Err()
 }
+
+
+func (s *SQLite) ListAria2Work(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT "+taskColumns+`
+		FROM tasks
+		WHERE status IN (?, ?)
+		  AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+		ORDER BY created_at ASC
+		LIMIT ?`,
+		string(domain.TaskWaitingAria2),
+		string(domain.TaskAria2Downloading),
+		now.UTC().Format(time.RFC3339Nano),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanTasks(rows)
+}
+
+func (s *SQLite) EnsureDownloads(ctx context.Context, taskID, instance string, gidFor func(string, string) string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR IGNORE INTO downloads(
+			task_id, pikpak_file_id, aria2_instance, aria2_gid, status,
+			relative_path, expected_size, created_at, updated_at
+		)
+		SELECT task_id, pikpak_file_id, ?, '', ?, relative_path, size, ?, ?
+		FROM remote_files
+		WHERE task_id = ? AND is_folder = 0
+	`, instance, string(domain.DownloadPending), now, now, taskID)
+	if err != nil {
+		return err
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pikpak_file_id
+		FROM downloads
+		WHERE task_id = ? AND aria2_gid = ''
+	`, taskID)
+	if err != nil {
+		return err
+	}
+	var fileIDs []string
+	for rows.Next() {
+		var fileID string
+		if err := rows.Scan(&fileID); err != nil {
+			rows.Close()
+			return err
+		}
+		fileIDs = append(fileIDs, fileID)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, fileID := range fileIDs {
+		gid := gidFor(taskID, fileID)
+		if gid == "" {
+			return fmt.Errorf("empty aria2 gid for task %s file %s", taskID, fileID)
+		}
+		if _, err := s.db.ExecContext(ctx, `
+			UPDATE downloads SET aria2_gid = ?, updated_at = ?
+			WHERE task_id = ? AND pikpak_file_id = ? AND aria2_gid = ''
+		`, gid, now, taskID, fileID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLite) ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT task_id, pikpak_file_id, aria2_instance, aria2_gid, status,
+		       relative_path, expected_size, total_length, completed_length,
+		       retry_count, next_attempt_at, last_error, created_at, updated_at
+		FROM downloads
+		WHERE task_id = ?
+		ORDER BY relative_path ASC
+	`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.Download
+	for rows.Next() {
+		var download domain.Download
+		var status, createdAt, updatedAt string
+		var nextAttempt sql.NullString
+		if err := rows.Scan(
+			&download.TaskID,
+			&download.PikPakFileID,
+			&download.Aria2Instance,
+			&download.Aria2GID,
+			&status,
+			&download.RelativePath,
+			&download.ExpectedSize,
+			&download.TotalLength,
+			&download.CompletedLength,
+			&download.RetryCount,
+			&nextAttempt,
+			&download.LastError,
+			&createdAt,
+			&updatedAt,
+		); err != nil {
+			return nil, err
+		}
+		download.Status = domain.DownloadStatus(status)
+		var err error
+		download.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		download.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+		if err != nil {
+			return nil, err
+		}
+		if nextAttempt.Valid {
+			value, err := time.Parse(time.RFC3339Nano, nextAttempt.String)
+			if err != nil {
+				return nil, err
+			}
+			download.NextAttemptAt = &value
+		}
+		out = append(out, download)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) error {
+	download.UpdatedAt = time.Now().UTC()
+	var nextAttempt any
+	if download.NextAttemptAt != nil {
+		nextAttempt = download.NextAttemptAt.UTC().Format(time.RFC3339Nano)
+	}
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE downloads SET
+			aria2_instance = ?,
+			aria2_gid = ?,
+			status = ?,
+			relative_path = ?,
+			expected_size = ?,
+			total_length = ?,
+			completed_length = ?,
+			retry_count = ?,
+			next_attempt_at = ?,
+			last_error = ?,
+			updated_at = ?
+		WHERE task_id = ? AND pikpak_file_id = ?
+	`,
+		download.Aria2Instance,
+		download.Aria2GID,
+		string(download.Status),
+		download.RelativePath,
+		download.ExpectedSize,
+		download.TotalLength,
+		download.CompletedLength,
+		download.RetryCount,
+		nextAttempt,
+		download.LastError,
+		download.UpdatedAt.Format(time.RFC3339Nano),
+		download.TaskID,
+		download.PikPakFileID,
+	)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 
 func scanTasks(rows *sql.Rows) ([]domain.Task, error) {
 	var out []domain.Task

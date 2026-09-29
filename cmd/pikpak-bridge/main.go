@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
 	"github.com/nukewarrior/pikpak-bridge/internal/config"
 	"github.com/nukewarrior/pikpak-bridge/internal/httpapi"
 	"github.com/nukewarrior/pikpak-bridge/internal/pikpak"
@@ -39,8 +40,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	provider := pikpak.NewManager(
+		cfg.PikPak.Accounts,
+		cfg.PikPak.SessionDir,
+		cfg.PikPak.MaxJobsPerAccount,
+	)
+
 	if len(cfg.PikPak.Accounts) > 0 {
-		pikpakWorker, err := buildPikPakWorker(cfg, db)
+		pikpakWorker, err := buildPikPakWorker(cfg, db, provider)
 		if err != nil {
 			slog.Error("configure PikPak worker", "error", err)
 			os.Exit(1)
@@ -48,6 +55,17 @@ func main() {
 		go pikpakWorker.Run(ctx)
 	} else {
 		slog.Warn("no PikPak accounts configured; queued tasks will not be processed")
+	}
+
+	if len(cfg.Aria2.Instances) > 0 && len(cfg.PikPak.Accounts) > 0 {
+		aria2Worker, err := buildAria2Worker(cfg, db, provider)
+		if err != nil {
+			slog.Error("configure aria2 worker", "error", err)
+			os.Exit(1)
+		}
+		go aria2Worker.Run(ctx)
+	} else if len(cfg.Aria2.Instances) == 0 {
+		slog.Warn("no aria2 instances configured; completed PikPak tasks will wait")
 	}
 
 	api := httpapi.New(db)
@@ -78,7 +96,7 @@ func main() {
 	}
 }
 
-func buildPikPakWorker(cfg *config.Config, db *store.SQLite) (*worker.Worker, error) {
+func buildPikPakWorker(cfg *config.Config, db *store.SQLite, provider pikpak.Provider) (*worker.Worker, error) {
 	quotaRefresh, err := time.ParseDuration(cfg.PikPak.QuotaRefresh)
 	if err != nil {
 		return nil, err
@@ -109,11 +127,6 @@ func buildPikPakWorker(cfg *config.Config, db *store.SQLite) (*worker.Worker, er
 		accountNames = append(accountNames, account.Name)
 	}
 
-	provider := pikpak.NewManager(
-		cfg.PikPak.Accounts,
-		cfg.PikPak.SessionDir,
-		cfg.PikPak.MaxJobsPerAccount,
-	)
 	return worker.New(db, provider, worker.Options{
 		AccountNames:            accountNames,
 		WorkerInterval:          workerInterval,
@@ -124,5 +137,27 @@ func buildPikPakWorker(cfg *config.Config, db *store.SQLite) (*worker.Worker, er
 		MinFreeSpace:            minFreeSpace,
 		AccountFailureThreshold: cfg.Scheduler.AccountFailureThreshold,
 		AccountCooldown:         accountCooldown,
+	}), nil
+}
+
+func buildAria2Worker(cfg *config.Config, db *store.SQLite, provider pikpak.Provider) (*worker.Aria2Worker, error) {
+	workerInterval, err := time.ParseDuration(cfg.Scheduler.WorkerInterval)
+	if err != nil {
+		return nil, err
+	}
+	statusInterval, err := time.ParseDuration(cfg.Aria2.StatusInterval)
+	if err != nil {
+		return nil, err
+	}
+	retryInterval, err := time.ParseDuration(cfg.Scheduler.RetryInterval)
+	if err != nil {
+		return nil, err
+	}
+	pool := aria2.NewPool(cfg.Aria2.Instances)
+	return worker.NewAria2(db, provider, pool, worker.Aria2Options{
+		WorkerInterval: workerInterval,
+		StatusInterval: statusInterval,
+		RetryInterval:  retryInterval,
+		MaxRetry:       cfg.Scheduler.MaxRetry,
 	}), nil
 }

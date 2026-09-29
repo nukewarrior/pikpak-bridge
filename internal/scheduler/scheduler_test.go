@@ -34,8 +34,8 @@ func TestSelectAria2Instance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "vps" {
-		t.Fatalf("want vps because it is idle, got %s", got.Name)
+	if got.Name != "home" {
+		t.Fatalf("want home because capacity and weight outweigh idle status, got %s", got.Name)
 	}
 }
 

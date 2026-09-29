@@ -51,9 +51,17 @@ func (c *Client) GetGlobalStat(ctx context.Context) (GlobalStat, error) {
 }
 
 func (c *Client) AddURI(ctx context.Context, uri, dir string) (string, error) {
-	params := []any{[]string{uri}}
+	options := map[string]string{}
 	if dir != "" {
-		params = append(params, map[string]string{"dir": dir})
+		options["dir"] = dir
+	}
+	return c.AddURIWithOptions(ctx, uri, options)
+}
+
+func (c *Client) AddURIWithOptions(ctx context.Context, uri string, options map[string]string) (string, error) {
+	params := []any{[]string{uri}}
+	if len(options) > 0 {
+		params = append(params, options)
 	}
 	var gid string
 	if err := c.call(ctx, "aria2.addUri", params, &gid); err != nil {
@@ -66,6 +74,11 @@ func (c *Client) TellStatus(ctx context.Context, gid string) (Status, error) {
 	var out Status
 	err := c.call(ctx, "aria2.tellStatus", []any{gid}, &out)
 	return out, err
+}
+
+func (c *Client) RemoveDownloadResult(ctx context.Context, gid string) error {
+	var result string
+	return c.call(ctx, "aria2.removeDownloadResult", []any{gid}, &result)
 }
 
 type rpcRequest struct {

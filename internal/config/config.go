@@ -110,6 +110,9 @@ func applyDefaults(cfg *Config) {
 	if cfg.PikPak.MinFreeSpace == "" {
 		cfg.PikPak.MinFreeSpace = "2GB"
 	}
+	if cfg.Aria2.StatusInterval == "" {
+		cfg.Aria2.StatusInterval = "5s"
+	}
 	if cfg.Scheduler.Aria2Affinity == "" {
 		cfg.Scheduler.Aria2Affinity = "task"
 	}
