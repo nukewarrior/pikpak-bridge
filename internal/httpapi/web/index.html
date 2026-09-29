@@ -8,7 +8,54 @@
   <link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
-  <div class="shell">
+  <section id="setupScreen" class="setup-screen hidden">
+    <div class="setup-wrap">
+      <div class="setup-brand">
+        <div class="brand-mark"><span></span><span></span></div>
+        <div>
+          <span class="eyebrow">FIRST RUN</span>
+          <h1>设置 PikPak Bridge</h1>
+          <p>配置只需完成一次，保存后立即开始工作。</p>
+        </div>
+      </div>
+
+      <form id="setupForm" class="setup-form">
+        <section class="card setup-card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">PIKPAK</span>
+              <h2>PikPak 账号</h2>
+            </div>
+            <button id="addAccountBtn" class="secondary-btn" type="button">+ 添加账号</button>
+          </div>
+          <div id="setupAccounts" class="setup-list"></div>
+        </section>
+
+        <section class="card setup-card">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">ARIA2</span>
+              <h2>aria2 下载节点</h2>
+            </div>
+            <button id="addAria2Btn" class="secondary-btn" type="button">+ 添加节点</button>
+          </div>
+          <div id="setupAria2" class="setup-list"></div>
+        </section>
+
+        <div class="setup-actions">
+          <div>
+            <strong>配置将保存到 /data/config.yaml</strong>
+            <span>账号密码和 RPC secret 不会回传到浏览器。</span>
+          </div>
+          <button id="setupSubmitBtn" class="primary-btn" type="submit">
+            <span>保存并开始使用</span><span aria-hidden="true">→</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <div id="dashboard" class="shell hidden">
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark"><span></span><span></span></div>
