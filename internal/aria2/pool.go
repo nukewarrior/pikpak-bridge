@@ -6,6 +6,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/config"
 )
@@ -68,30 +69,37 @@ func NewPool(configs []config.Aria2Instance) *Pool {
 }
 
 func (p *Pool) Snapshots(ctx context.Context) []InstanceSnapshot {
-	out := make([]InstanceSnapshot, 0, len(p.order))
-	for _, name := range p.order {
-		instance := p.instances[name]
-		snapshot := InstanceSnapshot{
-			Name:      instance.name,
-			Enabled:   instance.enabled,
-			MaxActive: instance.maxActive,
-			Weight:    instance.weight,
-		}
-		if !instance.enabled {
-			out = append(out, snapshot)
-			continue
-		}
-		stat, err := instance.client.GetGlobalStat(ctx)
-		if err != nil {
-			snapshot.Error = err.Error()
-			out = append(out, snapshot)
-			continue
-		}
-		snapshot.Active = parseCount(stat.NumActive)
-		snapshot.Waiting = parseCount(stat.NumWaiting)
-		snapshot.Healthy = true
-		out = append(out, snapshot)
+	out := make([]InstanceSnapshot, len(p.order))
+	var wg sync.WaitGroup
+	for i, name := range p.order {
+		i, name := i, name
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			instance := p.instances[name]
+			snapshot := InstanceSnapshot{
+				Name:      instance.name,
+				Enabled:   instance.enabled,
+				MaxActive: instance.maxActive,
+				Weight:    instance.weight,
+			}
+			if !instance.enabled {
+				out[i] = snapshot
+				return
+			}
+			stat, err := instance.client.GetGlobalStat(ctx)
+			if err != nil {
+				snapshot.Error = err.Error()
+				out[i] = snapshot
+				return
+			}
+			snapshot.Active = parseCount(stat.NumActive)
+			snapshot.Waiting = parseCount(stat.NumWaiting)
+			snapshot.Healthy = true
+			out[i] = snapshot
+		}()
 	}
+	wg.Wait()
 	return out
 }
 
