@@ -274,7 +274,16 @@ func (m *Manager) DeletePermanently(ctx context.Context, account, fileID string)
 	if err := entry.client.Login(ctx); err != nil {
 		return err
 	}
-	return entry.client.DeletePermanently(ctx, fileID)
+	if err := entry.client.DeletePermanently(ctx, fileID); err != nil {
+		// Cleanup is deliberately idempotent. If a previous delete succeeded
+		// remotely but the bridge crashed before persisting COMPLETED, a retry
+		// may observe that the exact recorded root ID is already gone.
+		if KindOf(err) == ErrorKindNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) get(name string) (*managedAccount, error) {
