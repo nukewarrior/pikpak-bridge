@@ -1,0 +1,46 @@
+server:
+  listen: 0.0.0.0:8080
+  token: ${PIKPAK_BRIDGE_TOKEN}
+
+database:
+  path: /data/pikpak-bridge.db
+
+pikpak:
+  quota_refresh: 5m
+  status_interval: 10s
+  min_free_space: 2GB
+  max_jobs_per_account: 2
+  accounts:
+    - name: pp01
+      username: ${PIKPAK_PP01_USERNAME}
+      password: ${PIKPAK_PP01_PASSWORD}
+    - name: pp02
+      username: ${PIKPAK_PP02_USERNAME}
+      password: ${PIKPAK_PP02_PASSWORD}
+
+aria2:
+  status_interval: 5s
+  instances:
+    - name: unraid
+      url: http://192.168.1.10:6800/jsonrpc
+      secret: ${ARIA2_UNRAID_SECRET}
+      dir: /downloads/pikpak
+      max_active: 4
+      weight: 10
+    - name: backup
+      url: http://192.168.1.20:6800/jsonrpc
+      secret: ${ARIA2_BACKUP_SECRET}
+      dir: /downloads/pikpak
+      max_active: 2
+      weight: 5
+
+scheduler:
+  aria2_affinity: task
+  retry_interval: 30s
+  max_retry: 10
+
+cleanup:
+  enabled: true
+  permanent: true
+  verify_size: true
+  delay: 60s
