@@ -31,7 +31,11 @@ func (v *flexibleInt64) UnmarshalJSON(data []byte) error {
 		if err := json.Unmarshal(data, &s); err != nil {
 			return err
 		}
-		if s == "" {\n\t\t\t*v = 0\n\t\t\treturn nil\n\t\t}\n\t\tn, err := strconv.ParseInt(s, 10, 64)
+		if s == "" {
+			*v = 0
+			return nil
+		}
+		n, err := strconv.ParseInt(s, 10, 64)
 		if err != nil {
 			return fmt.Errorf("parse quoted int64 %q: %w", s, err)
 		}
