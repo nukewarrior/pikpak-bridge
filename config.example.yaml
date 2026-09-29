@@ -6,6 +6,7 @@ database:
   path: /data/pikpak-bridge.db
 
 pikpak:
+  session_dir: /data/sessions
   quota_refresh: 5m
   status_interval: 10s
   min_free_space: 2GB
