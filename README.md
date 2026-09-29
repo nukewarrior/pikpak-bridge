@@ -51,31 +51,46 @@ Supported platforms:
 - linux/amd64
 - linux/arm64
 
-Each master build also publishes a commit-pinned `sha-xxxxxxx` tag. Git tags such as `v0.1.0` are published with the same image tag.
+### First run
 
-Start with the included Compose file:
+No config file or environment variables are required for the initial setup.
 
 ~~~bash
-cp config.example.yaml config.yaml
-# edit config.yaml and/or export the referenced environment variables
 docker compose pull
 docker compose up -d
 ~~~
 
-Then open `http://<host>:8080/`.
+Then open:
+
+~~~text
+http://<host>:8080/
+~~~
+
+The first-run Web UI asks for:
+
+- one or more PikPak accounts
+- one or more aria2 JSON-RPC endpoints
+- each aria2 download directory, concurrency and scheduler weight
+
+After saving, PikPak Bridge writes the complete configuration to:
+
+~~~text
+/data/config.yaml
+~~~
+
+The file is created with mode `0600` inside the persistent `./data:/data` volume, and workers start immediately without restarting the container. Subsequent restarts load this saved configuration and go directly to the dashboard.
+
+To reset the first-run setup, stop the container and remove `./data/config.yaml`. The SQLite database and sessions are separate files under `./data`; removing only `config.yaml` does not erase task history.
+
+Each master build publishes both `latest` and a commit-pinned `sha-xxxxxxx` image tag. Git tags such as `v0.1.0` are also published with the same image tag.
 
 ## Web UI
 
 The Web UI is embedded into the Go binary. No Node.js build or separate frontend container is required.
 
-After starting the service, open:
-
-~~~text
-http://localhost:8080/
-~~~
-
 The dashboard provides:
 
+- first-run setup for PikPak accounts and aria2 instances
 - task submission for Magnet / HTTP(S) / ED2K / BTIH
 - live task states and aria2 download progress
 - task details including PikPak IDs and aria2 GIDs

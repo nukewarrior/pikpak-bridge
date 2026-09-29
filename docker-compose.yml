@@ -7,13 +7,5 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/data
-      - ./config.yaml:/app/config.yaml:ro
     environment:
       TZ: Asia/Shanghai
-      PIKPAK_BRIDGE_TOKEN: ${PIKPAK_BRIDGE_TOKEN:-change-me}
-      PIKPAK_PP01_USERNAME: ${PIKPAK_PP01_USERNAME:-}
-      PIKPAK_PP01_PASSWORD: ${PIKPAK_PP01_PASSWORD:-}
-      PIKPAK_PP02_USERNAME: ${PIKPAK_PP02_USERNAME:-}
-      PIKPAK_PP02_PASSWORD: ${PIKPAK_PP02_PASSWORD:-}
-      ARIA2_UNRAID_SECRET: ${ARIA2_UNRAID_SECRET:-}
-      ARIA2_BACKUP_SECRET: ${ARIA2_BACKUP_SECRET:-}

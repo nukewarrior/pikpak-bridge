@@ -17,5 +17,5 @@ COPY --from=build /out/pikpak-bridge /usr/local/bin/pikpak-bridge
 COPY config.example.yaml /app/config.example.yaml
 VOLUME ["/data"]
 EXPOSE 8080
-ENV PIKPAK_BRIDGE_CONFIG=/app/config.yaml
+ENV PIKPAK_BRIDGE_CONFIG=/data/config.yaml
 ENTRYPOINT ["pikpak-bridge"]

@@ -33,23 +33,30 @@ const ACTIVE = new Set([
   "VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"
 ]);
 const FAILED = new Set(["PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_FAILED"]);
+
 let taskRefreshBusy = false;
 let statusRefreshBusy = false;
+let dashboardStarted = false;
 let toastTimer;
+let accountSeq = 0;
+let aria2Seq = 0;
 
 function esc(value) {
   return String(value ?? "")
     .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
     .replaceAll('"',"&quot;").replaceAll("'","&#039;");
 }
+
 function truncate(value, length=70) {
   const s = String(value ?? "");
   return s.length > length ? s.slice(0, length - 1) + "…" : s;
 }
+
 function statusBadge(status) {
   const [label, cls] = STATUS[status] || [status || "未知", ""];
   return `<span class="badge ${cls}">${esc(label)}</span>`;
 }
+
 function fmtTime(value) {
   if (!value) return "—";
   const d = new Date(value);
@@ -59,6 +66,7 @@ function fmtTime(value) {
     hour12:false
   }).format(d);
 }
+
 function fmtBytes(bytes) {
   const n = Number(bytes || 0);
   if (!Number.isFinite(n) || n <= 0) return "0 B";
@@ -67,6 +75,7 @@ function fmtBytes(bytes) {
   while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
   return `${v >= 10 || i === 0 ? v.toFixed(0) : v.toFixed(1)} ${units[i]}`;
 }
+
 function toast(message, isError=false) {
   const el = $("toast");
   el.textContent = message;
@@ -74,6 +83,7 @@ function toast(message, isError=false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.className = "toast", 3500);
 }
+
 async function request(url, options) {
   const res = await fetch(url, options);
   let body = {};
@@ -86,17 +96,157 @@ async function request(url, options) {
   }
   return body;
 }
+
+function accountEntry(values={}) {
+  accountSeq += 1;
+  const index = accountSeq;
+  const div = document.createElement("div");
+  div.className = "setup-entry";
+  div.dataset.kind = "account";
+  div.innerHTML = `
+    <div class="setup-entry-head">
+      <strong>PikPak 账号 #${index}</strong>
+      <button class="remove-btn" type="button">移除</button>
+    </div>
+    <div class="setup-grid">
+      <div class="field">
+        <label>名称</label>
+        <input data-field="name" value="${esc(values.name || "pp" + String(index).padStart(2,"0"))}" required>
+      </div>
+      <div class="field">
+        <label>账号</label>
+        <input data-field="username" value="${esc(values.username || "")}" autocomplete="username" placeholder="邮箱或手机号" required>
+      </div>
+      <div class="field wide">
+        <label>密码</label>
+        <input data-field="password" type="password" autocomplete="new-password" placeholder="PikPak 登录密码" required>
+      </div>
+    </div>`;
+  div.querySelector(".remove-btn").addEventListener("click", () => {
+    if ($("setupAccounts").children.length <= 1) {
+      toast("至少保留一个 PikPak 账号。", true);
+      return;
+    }
+    div.remove();
+  });
+  return div;
+}
+
+function aria2Entry(values={}) {
+  aria2Seq += 1;
+  const index = aria2Seq;
+  const div = document.createElement("div");
+  div.className = "setup-entry";
+  div.dataset.kind = "aria2";
+  div.innerHTML = `
+    <div class="setup-entry-head">
+      <strong>aria2 节点 #${index}</strong>
+      <button class="remove-btn" type="button">移除</button>
+    </div>
+    <div class="setup-grid">
+      <div class="field">
+        <label>名称</label>
+        <input data-field="name" value="${esc(values.name || "aria2-" + String(index).padStart(2,"0"))}" required>
+      </div>
+      <div class="field">
+        <label>RPC Secret</label>
+        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="未设置可留空">
+      </div>
+      <div class="field wide">
+        <label>JSON-RPC 地址</label>
+        <input data-field="url" value="${esc(values.url || "")}" placeholder="http://192.168.1.10:6800/jsonrpc" required>
+      </div>
+      <div class="field wide">
+        <label>下载目录</label>
+        <input data-field="dir" value="${esc(values.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
+        <span class="hint">填写 aria2 所在机器看到的目录，不是 PikPak Bridge 容器内部目录。</span>
+      </div>
+      <div class="field">
+        <label>最大活动任务</label>
+        <input data-field="max_active" type="number" min="1" max="100" value="${esc(values.max_active || 4)}" required>
+      </div>
+      <div class="field">
+        <label>调度权重</label>
+        <input data-field="weight" type="number" min="0.1" step="0.1" value="${esc(values.weight || 10)}" required>
+      </div>
+    </div>`;
+  div.querySelector(".remove-btn").addEventListener("click", () => {
+    if ($("setupAria2").children.length <= 1) {
+      toast("至少保留一个 aria2 节点。", true);
+      return;
+    }
+    div.remove();
+  });
+  return div;
+}
+
+function showSetup() {
+  $("dashboard").classList.add("hidden");
+  $("setupScreen").classList.remove("hidden");
+  if (!$("setupAccounts").children.length) $("setupAccounts").appendChild(accountEntry());
+  if (!$("setupAria2").children.length) $("setupAria2").appendChild(aria2Entry({name:"unraid"}));
+}
+
+function showDashboard() {
+  $("setupScreen").classList.add("hidden");
+  $("dashboard").classList.remove("hidden");
+}
+
+function collectSetup() {
+  const accounts = [...$("setupAccounts").querySelectorAll(".setup-entry")].map(row => ({
+    name: row.querySelector('[data-field="name"]').value.trim(),
+    username: row.querySelector('[data-field="username"]').value.trim(),
+    password: row.querySelector('[data-field="password"]').value
+  }));
+  const instances = [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
+    name: row.querySelector('[data-field="name"]').value.trim(),
+    url: row.querySelector('[data-field="url"]').value.trim(),
+    secret: row.querySelector('[data-field="secret"]').value,
+    dir: row.querySelector('[data-field="dir"]').value.trim(),
+    max_active: Number(row.querySelector('[data-field="max_active"]').value),
+    weight: Number(row.querySelector('[data-field="weight"]').value)
+  }));
+  return {pikpak_accounts: accounts, aria2_instances: instances};
+}
+
+async function bootstrap() {
+  try {
+    const state = await request("/api/v1/setup");
+    if (!state.configured) {
+      showSetup();
+      return;
+    }
+    showDashboard();
+    startDashboard();
+  } catch (err) {
+    showSetup();
+    toast("无法读取初始化状态：" + err.message, true);
+  }
+}
+
+function startDashboard() {
+  if (dashboardStarted) return;
+  dashboardStarted = true;
+  loadHealth();
+  loadTasks();
+  loadStatus();
+  setInterval(loadHealth, 15000);
+  setInterval(loadTasks, 3000);
+  setInterval(loadStatus, 60000);
+}
+
 async function loadHealth() {
   const badge = $("healthBadge");
   try {
-    await request("/healthz");
-    badge.className = "health-badge ok";
-    badge.innerHTML = '<span class="dot"></span><span>服务在线</span>';
+    const health = await request("/healthz");
+    badge.className = health.configured ? "health-badge ok" : "health-badge";
+    badge.innerHTML = '<span class="dot"></span><span>' + (health.configured ? "服务在线" : "等待配置") + '</span>';
   } catch (_) {
     badge.className = "health-badge bad";
     badge.innerHTML = '<span class="dot"></span><span>连接失败</span>';
   }
 }
+
 async function progressForTask(task) {
   if (!["ARIA2_DOWNLOADING","VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"].includes(task.status)) {
     return null;
@@ -111,6 +261,7 @@ async function progressForTask(task) {
     return { total, done, completedFiles, count:files.length, pct: total > 0 ? Math.min(100, done / total * 100) : 0 };
   } catch (_) { return null; }
 }
+
 async function loadTasks() {
   if (taskRefreshBusy) return;
   taskRefreshBusy = true;
@@ -159,11 +310,13 @@ async function loadTasks() {
     taskRefreshBusy = false;
   }
 }
+
 function resourceBadge(ok, state) {
   if (ok) return '<span class="badge success">正常</span>';
   if (state === "DISABLED") return '<span class="badge">禁用</span>';
   return `<span class="badge fail">${esc(state || "异常")}</span>`;
 }
+
 async function loadStatus() {
   if (statusRefreshBusy) return;
   statusRefreshBusy = true;
@@ -198,6 +351,7 @@ async function loadStatus() {
     statusRefreshBusy = false;
   }
 }
+
 async function openTask(id) {
   const dialog = $("taskDialog");
   $("dialogTitle").textContent = id;
@@ -237,6 +391,30 @@ async function openTask(id) {
   }
 }
 
+$("addAccountBtn").addEventListener("click", () => $("setupAccounts").appendChild(accountEntry()));
+$("addAria2Btn").addEventListener("click", () => $("setupAria2").appendChild(aria2Entry()));
+
+$("setupForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = $("setupSubmitBtn");
+  button.disabled = true;
+  try {
+    const payload = collectSetup();
+    await request("/api/v1/setup", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload)
+    });
+    toast("初始化完成，PikPak Bridge 已开始工作。");
+    showDashboard();
+    startDashboard();
+  } catch (err) {
+    toast("保存失败：" + err.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("sourceInput");
@@ -269,14 +447,10 @@ $("refreshBtn").addEventListener("click", async () => {
   await Promise.all([loadHealth(), loadTasks(), loadStatus()]);
   $("refreshBtn").textContent = "↻";
 });
+
 $("dialogClose").addEventListener("click", () => $("taskDialog").close());
 $("taskDialog").addEventListener("click", (event) => {
   if (event.target === $("taskDialog")) $("taskDialog").close();
 });
 
-loadHealth();
-loadTasks();
-loadStatus();
-setInterval(loadHealth, 15000);
-setInterval(loadTasks, 3000);
-setInterval(loadStatus, 60000);
+bootstrap();
