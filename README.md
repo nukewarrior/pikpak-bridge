@@ -45,6 +45,26 @@ The first foundation includes:
 
 The PikPak private-API adapter and background state-machine workers are the next implementation stage.
 
+## Web UI
+
+The Web UI is embedded into the Go binary. No Node.js build or separate frontend container is required.
+
+After starting the service, open:
+
+~~~text
+http://localhost:8080/
+~~~
+
+The dashboard provides:
+
+- task submission for Magnet / HTTP(S) / ED2K / BTIH
+- live task states and aria2 download progress
+- task details including PikPak IDs and aria2 GIDs
+- PikPak account health, remaining offline quota, active jobs, and free storage
+- aria2 instance health, active/waiting jobs, capacity, and scheduler weight
+
+The task list refreshes automatically. Runtime account/node status refreshes less frequently to avoid unnecessary remote API traffic.
+
 ## API
 
 Create a task:

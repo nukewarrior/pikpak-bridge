@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>PikPak Bridge</title>
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><span></span><span></span></div>
+        <div>
+          <h1>PikPak Bridge</h1>
+          <p>离线下载调度器</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <div id="healthBadge" class="health-badge"><span class="dot"></span><span>连接中</span></div>
+        <button id="refreshBtn" class="icon-btn" type="button" title="刷新">↻</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="submit-card card">
+        <div class="submit-copy">
+          <span class="eyebrow">NEW TASK</span>
+          <h2>添加下载任务</h2>
+          <p>支持 Magnet、HTTP/HTTPS、ED2K 和 40 位 BTIH。</p>
+        </div>
+        <form id="taskForm" class="submit-form">
+          <textarea id="sourceInput" rows="3" spellcheck="false" placeholder="粘贴下载链接或磁链…"></textarea>
+          <div class="submit-footer">
+            <span id="submitHint">任务会自动选择可用 PikPak 账号和 aria2 实例。</span>
+            <button id="submitBtn" class="primary-btn" type="submit">
+              <span>开始任务</span><span aria-hidden="true">→</span>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="stats-grid" aria-label="任务总览">
+        <article class="stat-card"><span>全部任务</span><strong id="statTotal">—</strong><small>最近 100 条</small></article>
+        <article class="stat-card"><span>处理中</span><strong id="statActive">—</strong><small>正在调度或下载</small></article>
+        <article class="stat-card"><span>已完成</span><strong id="statCompleted">—</strong><small>已校验并清理</small></article>
+        <article class="stat-card danger"><span>异常</span><strong id="statFailed">—</strong><small>需要检查</small></article>
+      </section>
+
+      <div class="layout">
+        <section class="card tasks-card">
+          <div class="section-head">
+            <div><span class="eyebrow">TASKS</span><h2>任务队列</h2></div>
+            <span id="taskUpdated" class="muted">—</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>状态</th><th>来源</th><th>进度</th><th>PikPak</th><th>aria2</th><th>更新时间</th></tr></thead>
+              <tbody id="taskRows"><tr><td colspan="6" class="empty">正在加载任务…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside class="side-stack">
+          <section class="card">
+            <div class="section-head">
+              <div><span class="eyebrow">PIKPAK</span><h2>账号池</h2></div>
+              <span id="accountCount" class="counter">0</span>
+            </div>
+            <div id="accountList" class="resource-list"><div class="empty-block">正在获取账号状态…</div></div>
+          </section>
+
+          <section class="card">
+            <div class="section-head">
+              <div><span class="eyebrow">ARIA2</span><h2>下载节点</h2></div>
+              <span id="aria2Count" class="counter">0</span>
+            </div>
+            <div id="aria2List" class="resource-list"><div class="empty-block">正在获取节点状态…</div></div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="taskDialog">
+    <div class="dialog-head">
+      <div><span class="eyebrow">TASK DETAIL</span><h2 id="dialogTitle">任务详情</h2></div>
+      <button id="dialogClose" class="icon-btn" type="button">×</button>
+    </div>
+    <div id="dialogBody"></div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

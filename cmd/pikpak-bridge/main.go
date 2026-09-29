@@ -46,6 +46,12 @@ func main() {
 		cfg.PikPak.MaxJobsPerAccount,
 	)
 
+	accountNames := make([]string, 0, len(cfg.PikPak.Accounts))
+	for _, account := range cfg.PikPak.Accounts {
+		accountNames = append(accountNames, account.Name)
+	}
+	ariaPool := aria2.NewPool(cfg.Aria2.Instances)
+
 	if len(cfg.PikPak.Accounts) > 0 {
 		pikpakWorker, err := buildPikPakWorker(cfg, db, provider)
 		if err != nil {
@@ -58,7 +64,7 @@ func main() {
 	}
 
 	if len(cfg.Aria2.Instances) > 0 && len(cfg.PikPak.Accounts) > 0 {
-		aria2Worker, err := buildAria2Worker(cfg, db, provider)
+		aria2Worker, err := buildAria2Worker(cfg, db, provider, ariaPool)
 		if err != nil {
 			slog.Error("configure aria2 worker", "error", err)
 			os.Exit(1)
@@ -77,7 +83,7 @@ func main() {
 		go finalizer.Run(ctx)
 	}
 
-	api := httpapi.New(db)
+	api := httpapi.New(db, httpapi.WithRuntimeStatus(accountNames, provider, ariaPool))
 	server := &http.Server{
 		Addr:              cfg.Server.Listen,
 		Handler:           api.Handler(),
@@ -149,7 +155,7 @@ func buildPikPakWorker(cfg *config.Config, db *store.SQLite, provider pikpak.Pro
 	}), nil
 }
 
-func buildAria2Worker(cfg *config.Config, db *store.SQLite, provider pikpak.Provider) (*worker.Aria2Worker, error) {
+func buildAria2Worker(cfg *config.Config, db *store.SQLite, provider pikpak.Provider, backend aria2.Backend) (*worker.Aria2Worker, error) {
 	workerInterval, err := time.ParseDuration(cfg.Scheduler.WorkerInterval)
 	if err != nil {
 		return nil, err
@@ -162,8 +168,7 @@ func buildAria2Worker(cfg *config.Config, db *store.SQLite, provider pikpak.Prov
 	if err != nil {
 		return nil, err
 	}
-	pool := aria2.NewPool(cfg.Aria2.Instances)
-	return worker.NewAria2(db, provider, pool, worker.Aria2Options{
+	return worker.NewAria2(db, provider, backend, worker.Aria2Options{
 		WorkerInterval: workerInterval,
 		StatusInterval: statusInterval,
 		RetryInterval:  retryInterval,

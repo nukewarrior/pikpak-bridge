@@ -15,6 +15,7 @@ type managedAccount struct {
 	name    string
 	enabled bool
 	client  *Client
+	mu      sync.Mutex
 }
 
 type Manager struct {
@@ -52,6 +53,8 @@ func (m *Manager) RefreshAccount(ctx context.Context, account string) (AccountSn
 	if err != nil {
 		return AccountSnapshot{}, err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if !entry.enabled {
 		return AccountSnapshot{Name: account, Enabled: false, State: "DISABLED"}, nil
 	}
@@ -133,6 +136,8 @@ func (m *Manager) SubmitOffline(ctx context.Context, account, source string) (Of
 	if err != nil {
 		return OfflineTask{}, err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if !entry.enabled {
 		return OfflineTask{}, fmt.Errorf("pikpak account %q is disabled", account)
 	}
@@ -179,6 +184,8 @@ func (m *Manager) GetOfflineTask(ctx context.Context, account, taskID string) (O
 	if err != nil {
 		return OfflineTask{}, err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if err := entry.client.Login(ctx); err != nil {
 		return OfflineTask{}, err
 	}
@@ -199,6 +206,8 @@ func (m *Manager) ListFiles(ctx context.Context, account, rootFileID string) ([]
 	if err != nil {
 		return nil, err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if err := entry.client.Login(ctx); err != nil {
 		return nil, err
 	}
@@ -257,6 +266,8 @@ func (m *Manager) GetDownloadURL(ctx context.Context, account, fileID string) (s
 	if err != nil {
 		return "", err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if err := entry.client.Login(ctx); err != nil {
 		return "", err
 	}
@@ -268,6 +279,8 @@ func (m *Manager) DeletePermanently(ctx context.Context, account, fileID string)
 	if err != nil {
 		return err
 	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
 	if strings.TrimSpace(fileID) == "" {
 		return fmt.Errorf("refusing to delete empty PikPak file ID")
 	}
