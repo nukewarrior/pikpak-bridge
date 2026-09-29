@@ -25,17 +25,29 @@ const (
 )
 
 type Task struct {
-	ID               string     `json:"id"`
-	Source            string     `json:"source"`
-	SourceType        string     `json:"source_type"`
-	SourceKey         string     `json:"-"`
-	Status            TaskStatus `json:"status"`
-	PikPakAccount     string     `json:"pikpak_account,omitempty"`
-	PikPakTaskID      string     `json:"pikpak_task_id,omitempty"`
-	PikPakRootFileID  string     `json:"pikpak_root_file_id,omitempty"`
-	Aria2Instance     string     `json:"aria2_instance,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	ID              string     `json:"id"`
+	Source          string     `json:"source"`
+	SourceType      string     `json:"source_type"`
+	SourceKey       string     `json:"-"`
+	Status          TaskStatus `json:"status"`
+	PikPakAccount   string     `json:"pikpak_account,omitempty"`
+	PikPakTaskID     string     `json:"pikpak_task_id,omitempty"`
+	PikPakRootFileID string     `json:"pikpak_root_file_id,omitempty"`
+	Aria2Instance   string     `json:"aria2_instance,omitempty"`
+	RetryCount      int        `json:"retry_count"`
+	NextAttemptAt   *time.Time `json:"next_attempt_at,omitempty"`
+	Error           string     `json:"error,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+}
+
+type RemoteFile struct {
+	TaskID       string `json:"task_id"`
+	PikPakFileID string `json:"pikpak_file_id"`
+	ParentFileID string `json:"parent_file_id,omitempty"`
+	Name         string `json:"name"`
+	RelativePath string `json:"relative_path"`
+	Size         int64  `json:"size"`
+	IsFolder     bool   `json:"is_folder"`
 }

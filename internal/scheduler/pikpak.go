@@ -22,7 +22,7 @@ func SelectPikPakAccount(accounts []pikpak.AccountSnapshot, requiredBytes int64,
 		if a.MaxJobs > 0 && a.ActiveJobs >= a.MaxJobs {
 			continue
 		}
-		if requiredBytes > 0 && a.StorageFree > 0 && a.StorageFree < requiredBytes {
+		if requiredBytes > 0 && a.StorageFree < requiredBytes {
 			continue
 		}
 		candidates = append(candidates, a)

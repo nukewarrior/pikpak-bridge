@@ -58,9 +58,12 @@ type Aria2Instance struct {
 }
 
 type SchedulerConfig struct {
-	Aria2Affinity string `yaml:"aria2_affinity"`
-	RetryInterval string `yaml:"retry_interval"`
-	MaxRetry      int    `yaml:"max_retry"`
+	Aria2Affinity          string `yaml:"aria2_affinity"`
+	WorkerInterval         string `yaml:"worker_interval"`
+	RetryInterval          string `yaml:"retry_interval"`
+	MaxRetry               int    `yaml:"max_retry"`
+	AccountFailureThreshold int   `yaml:"account_failure_threshold"`
+	AccountCooldown        string `yaml:"account_cooldown"`
 }
 
 type CleanupConfig struct {
@@ -98,11 +101,32 @@ func applyDefaults(cfg *Config) {
 	if cfg.PikPak.SessionDir == "" {
 		cfg.PikPak.SessionDir = "/data/sessions"
 	}
+	if cfg.PikPak.QuotaRefresh == "" {
+		cfg.PikPak.QuotaRefresh = "5m"
+	}
+	if cfg.PikPak.StatusInterval == "" {
+		cfg.PikPak.StatusInterval = "10s"
+	}
+	if cfg.PikPak.MinFreeSpace == "" {
+		cfg.PikPak.MinFreeSpace = "2GB"
+	}
 	if cfg.Scheduler.Aria2Affinity == "" {
 		cfg.Scheduler.Aria2Affinity = "task"
 	}
+	if cfg.Scheduler.WorkerInterval == "" {
+		cfg.Scheduler.WorkerInterval = "2s"
+	}
+	if cfg.Scheduler.RetryInterval == "" {
+		cfg.Scheduler.RetryInterval = "30s"
+	}
 	if cfg.Scheduler.MaxRetry == 0 {
 		cfg.Scheduler.MaxRetry = 10
+	}
+	if cfg.Scheduler.AccountFailureThreshold == 0 {
+		cfg.Scheduler.AccountFailureThreshold = 3
+	}
+	if cfg.Scheduler.AccountCooldown == "" {
+		cfg.Scheduler.AccountCooldown = "30m"
 	}
 	if cfg.PikPak.MaxJobsPerAccount == 0 {
 		cfg.PikPak.MaxJobsPerAccount = 2
@@ -113,13 +137,13 @@ func validate(cfg *Config) error {
 	if cfg.Scheduler.Aria2Affinity != "task" && cfg.Scheduler.Aria2Affinity != "file" {
 		return fmt.Errorf("scheduler.aria2_affinity must be task or file")
 	}
-	for i, a := range cfg.PikPak.Accounts {
-		if a.Name == "" {
+	for i, account := range cfg.PikPak.Accounts {
+		if account.Name == "" {
 			return fmt.Errorf("pikpak.accounts[%d].name is required", i)
 		}
 	}
-	for i, a := range cfg.Aria2.Instances {
-		if a.Name == "" || a.URL == "" {
+	for i, instance := range cfg.Aria2.Instances {
+		if instance.Name == "" || instance.URL == "" {
 			return fmt.Errorf("aria2.instances[%d] requires name and url", i)
 		}
 	}
