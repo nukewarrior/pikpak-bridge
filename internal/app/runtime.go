@@ -172,6 +172,36 @@ func (r *Runtime) Aria2Snapshots(ctx context.Context) []aria2.InstanceSnapshot {
 	return registry.Snapshots(ctx)
 }
 
+func (r *Runtime) CancelPikPakOffline(ctx context.Context, accountID, taskID string) error {
+	r.mu.RLock()
+	provider := r.provider
+	r.mu.RUnlock()
+	if provider == nil {
+		return errors.New("PikPak runtime is unavailable")
+	}
+	return provider.CancelOfflineTask(ctx, accountID, taskID)
+}
+
+func (r *Runtime) DeletePikPakFile(ctx context.Context, accountID, fileID string) error {
+	r.mu.RLock()
+	provider := r.provider
+	r.mu.RUnlock()
+	if provider == nil {
+		return errors.New("PikPak runtime is unavailable")
+	}
+	return provider.DeletePermanently(ctx, accountID, fileID)
+}
+
+func (r *Runtime) CancelAria2(ctx context.Context, instanceID, gid string) error {
+	r.mu.RLock()
+	registry := r.registry
+	r.mu.RUnlock()
+	if registry == nil {
+		return errors.New("aria2 runtime is unavailable")
+	}
+	return registry.Remove(ctx, instanceID, gid)
+}
+
 func (r *Runtime) DownloadTargets() []config.DownloadTarget {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
