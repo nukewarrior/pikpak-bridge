@@ -15,6 +15,7 @@ type AccountSnapshot struct {
 	StorageFree    int64
 	StorageTotal   int64
 	ActiveJobs     int
+	ActiveTaskIDs  []string
 	MaxJobs        int
 	LastUsedAt     time.Time
 	CooldownUntil  time.Time
