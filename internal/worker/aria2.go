@@ -54,6 +54,12 @@ func NewAria2(store aria2Store, provider pikpak.Provider, backend aria2.Backend,
 }
 
 func (w *Aria2Worker) Run(ctx context.Context) {
+	slog.Info("aria2 worker started",
+		"worker_interval", w.options.WorkerInterval,
+		"status_interval", w.options.StatusInterval,
+		"retry_interval", w.options.RetryInterval,
+	)
+	defer slog.Info("aria2 worker stopped")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -102,6 +108,12 @@ func (w *Aria2Worker) processTask(ctx context.Context, task *domain.Task) error 
 		if err := w.store.EnsureDownloads(ctx, task.ID, task.Aria2InstanceID, deterministicGID); err != nil {
 			return w.retryTask(ctx, task, err)
 		}
+		slog.Info("aria2 dispatch started",
+			"task_id", task.ID,
+			"target_id", task.TargetID,
+			"aria2_instance_id", task.Aria2InstanceID,
+			"download_dir", task.DownloadDir,
+		)
 		task.Status = domain.TaskAria2Downloading
 		task.RetryCount = 0
 		task.Error = ""
@@ -129,6 +141,14 @@ func (w *Aria2Worker) targetReady(ctx context.Context, task *domain.Task) (bool,
 }
 
 func (w *Aria2Worker) waitForTarget(ctx context.Context, task *domain.Task, reason string) error {
+	slog.Warn("aria2 target not ready",
+		"task_id", task.ID,
+		"target_id", task.TargetID,
+		"aria2_instance_id", task.Aria2InstanceID,
+		"download_dir", task.DownloadDir,
+		"reason", reason,
+		"retry_in", w.options.RetryInterval,
+	)
 	task.Status = domain.TaskWaitingAria2
 	task.Error = reason
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
@@ -183,6 +203,11 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 		return w.failTask(ctx, task, errors.New("one or more aria2 downloads exhausted retries"))
 	}
 	if allComplete {
+		slog.Info("aria2 downloads complete",
+			"task_id", task.ID,
+			"aria2_instance_id", task.Aria2InstanceID,
+			"files", len(downloads),
+		)
 		task.Status = domain.TaskVerifying
 		task.RetryCount = 0
 		task.Error = ""
@@ -222,6 +247,12 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if gid != download.Aria2GID {
 		return w.retryDownload(ctx, download, fmt.Errorf("aria2 returned unexpected gid %q, want %q", gid, download.Aria2GID))
 	}
+	slog.Info("aria2 download submitted",
+		"task_id", task.ID,
+		"aria2_instance_id", download.Aria2InstanceID,
+		"gid", gid,
+		"path", download.RelativePath,
+	)
 	download.Status = domain.DownloadSubmitted
 	download.RetryCount = 0
 	download.LastError = ""
