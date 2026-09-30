@@ -45,7 +45,7 @@ The worker reserves account capacity before submission so a burst of queued task
 
 ### aria2 instances
 
-An aria2 instance represents only an RPC endpoint and its capacity:
+An aria2 instance represents only an RPC endpoint. aria2 itself owns active/waiting queue and concurrency control:
 
 ~~~yaml
 aria2:
@@ -54,7 +54,6 @@ aria2:
       name: Unraid
       url: http://192.168.1.10:6800/jsonrpc
       secret: ...
-      max_active: 4
 ~~~
 
 aria2 instances are not automatically selected by a scheduler.
@@ -81,7 +80,7 @@ Multiple targets may reuse the same aria2 instance.
 
 When a task is created, the target ID, target name, aria2 instance ID and destination directory are snapshotted onto the task. Later configuration changes therefore cannot silently move an existing task.
 
-If the selected aria2 instance is offline or at capacity, the task stays in `WAITING_ARIA2`. It does **not** fail over to another target.
+If the selected aria2 instance is offline, the task stays in `WAITING_ARIA2`. Once it is healthy, the files are submitted and aria2 handles its own active/waiting queue. The bridge does **not** fail over to another target.
 
 ## Current status
 
