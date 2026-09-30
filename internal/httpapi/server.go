@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -24,6 +25,9 @@ type taskStore interface {
 	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
 	ListDownloads(context.Context, string) ([]domain.Download, error)
+	ListTaskEvents(context.Context, string, int) ([]domain.TaskEvent, error)
+	ResetDownloadsForRetry(context.Context, string, bool) error
+	ClearTransferState(context.Context, string) error
 	ActiveResourceReferences(context.Context) ([]string, []string, error)
 }
 
@@ -79,6 +83,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/tasks", s.listTasks)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}", s.getTask)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/downloads", s.getTaskDownloads)
+	s.mux.HandleFunc("GET /api/v1/tasks/{id}/events", s.getTaskEvents)
+	s.mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.retryFailedTask)
 	s.registerWebUI()
 }
 
@@ -343,6 +349,81 @@ func (s *Server) getTaskDownloads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"downloads": downloads})
+}
+
+func (s *Server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	if _, err := s.store.GetTask(r.Context(), taskID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get task")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	events, err := s.store.ListTaskEvents(r.Context(), taskID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list task events")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
+	task, err := s.store.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get task")
+		return
+	}
+
+	previousStatus := task.Status
+	switch task.Status {
+	case domain.TaskPikPakFailed:
+		if err := s.store.ClearTransferState(r.Context(), task.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset PikPak transfer state")
+			return
+		}
+		task.PikPakAccountID = ""
+		task.PikPakTaskID = ""
+		task.PikPakRootFileID = ""
+		task.Status = domain.TaskWaitingPikPakAccount
+	case domain.TaskAria2Failed:
+		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, false); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset aria2 downloads")
+			return
+		}
+		task.Status = domain.TaskWaitingAria2
+	case domain.TaskVerifyFailed:
+		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, true); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset verification downloads")
+			return
+		}
+		task.Status = domain.TaskWaitingAria2
+	case domain.TaskCleanupFailed:
+		task.Status = domain.TaskReadyToCleanup
+	default:
+		writeError(w, http.StatusConflict, "only failed tasks can be retried")
+		return
+	}
+
+	task.ManualRetryCount++
+	task.RetryCount = 0
+	task.Error = ""
+	task.NextAttemptAt = nil
+	task.CompletedAt = nil
+	message := fmt.Sprintf("手动重试：从 %s 重新开始，第 %d 次手动重试，重新获得 10 次重试机会",
+		previousStatus, task.ManualRetryCount)
+	if err := s.store.SaveTask(r.Context(), &task, "task.manual_retry", message); err != nil {
+		writeError(w, http.StatusInternalServerError, "retry task")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, task)
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
