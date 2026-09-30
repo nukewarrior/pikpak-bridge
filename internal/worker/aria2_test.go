@@ -18,12 +18,12 @@ type fakeAria2 struct {
 
 func (f *fakeAria2) Snapshots(context.Context) []aria2.InstanceSnapshot {
 	return []aria2.InstanceSnapshot{{
-		ID: "a1", Name: "aria2", Enabled: true, Healthy: true, MaxActive: 4,
+		ID: "a1", Name: "aria2", Enabled: true, Healthy: true,
 	}}
 }
 func (f *fakeAria2) Snapshot(context.Context, string) (aria2.InstanceSnapshot, error) {
 	return aria2.InstanceSnapshot{
-		ID: "a1", Name: "aria2", Enabled: true, Healthy: true, MaxActive: 4,
+		ID: "a1", Name: "aria2", Enabled: true, Healthy: true,
 	}, nil
 }
 func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
