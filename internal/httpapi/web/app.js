@@ -933,7 +933,7 @@ async function openTask(id) {
   const dialog = $("taskDialog");
   $("dialogTitle").textContent = id;
   $("dialogBody").innerHTML = '<div class="empty-state"><span>正在加载…</span></div>';
-  dialog.showModal();
+  if (!dialog.open) dialog.showModal();
   try {
     const [task, downloadsData, eventsData] = await Promise.all([
       request(`/api/v1/tasks/${encodeURIComponent(id)}`),
