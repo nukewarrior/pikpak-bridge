@@ -38,10 +38,9 @@ let dashboardStarted = false;
 let taskRefreshBusy = false;
 let targetsRefreshBusy = false;
 let toastTimer;
-let accountSeq = 0;
-let aria2Seq = 0;
-let targetSeq = 0;
 let currentConfigView = "accounts";
+let configState = {pikpak_accounts:[], aria2_instances:[], targets:[]};
+let editingResource = null;
 
 function esc(value) {
   return String(value ?? "")
@@ -144,23 +143,18 @@ function showConfigView(data, view="accounts") {
   currentConfigView = CONFIG_VIEWS[view] ? view : "accounts";
   const meta = CONFIG_VIEWS[currentConfigView];
 
-  resetConfigForm();
+  configState = normalizeConfigData(data);
   $("homeView").classList.add("hidden");
   $("setupScreen").classList.remove("hidden");
 
-  (data?.pikpak_accounts || []).forEach(item => $("setupAccounts").appendChild(accountEntry(item)));
-  (data?.aria2_instances || []).forEach(item => $("setupAria2").appendChild(aria2Entry(item)));
-  (data?.targets || []).forEach(item => $("setupTargets").appendChild(targetEntry(item)));
-  refreshTargetAria2Options();
-
   document.querySelectorAll(".resource-page").forEach(section => section.classList.add("hidden"));
   $(meta.section).classList.remove("hidden");
-  $("setupActions").classList.toggle("hidden", currentConfigView === "settings");
 
   $("setupEyebrow").textContent = meta.eyebrow;
   $("setupTitle").textContent = meta.title;
   $("setupDescription").textContent = meta.description;
   setActiveNav(meta.nav);
+  renderResourcePage(currentConfigView);
   window.scrollTo({top:0, behavior:"smooth"});
 }
 
@@ -204,203 +198,334 @@ function makeInternalId(prefix) {
   return prefix + "-" + [...bytes].map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
-function accountEntry(values={}) {
-  accountSeq += 1;
-  const index = accountSeq;
-  const id = values.id || makeInternalId("pp");
-  const div = document.createElement("div");
-  div.className = "setup-entry";
-  div.dataset.kind = "account";
-  div.innerHTML = `
-    <div class="setup-entry-head">
-      <strong>PikPak 账号 #${index}</strong>
-      <button class="remove-btn" type="button">移除</button>
-    </div>
-    <div class="resource-form account-form">
-      <input data-field="id" type="hidden" value="${esc(id)}">
-
-      <div class="field field-name">
-        <label>名称</label>
-        <input data-field="name" value="${esc(values.name || ("PikPak 账号 " + index))}" required>
-      </div>
-      <div class="field field-enabled">
-        <label>状态</label>
-        <label class="switch-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}><span>启用此账号</span></label>
-      </div>
-
-      <div class="field field-username">
-        <label>账号</label>
-        <input data-field="username" value="${esc(values.username || "")}" autocomplete="username" placeholder="邮箱或手机号" required>
-      </div>
-      <div class="field field-password">
-        <label>密码</label>
-        <input data-field="password" type="password" autocomplete="new-password" placeholder="${values.password_set ? "已保存，留空保持不变" : "PikPak 登录密码"}" ${values.password_set ? "" : "required"}>
-      </div>
-
-      <div class="field field-jobs">
-        <label>最大并发离线任务</label>
-        <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(values.max_jobs || 2)}" required>
-        <span class="hint">限制此账号同时处理的 PikPak 离线任务数量。</span>
-      </div>
-    </div>`;
-  div.querySelector(".remove-btn").addEventListener("click", () => div.remove());
-  return div;
+function normalizeConfigData(data={}) {
+  return {
+    pikpak_accounts: (data.pikpak_accounts || []).map(x => ({...x})),
+    aria2_instances: (data.aria2_instances || []).map(x => ({...x})),
+    targets: (data.targets || []).map(x => ({...x}))
+  };
 }
 
-function aria2Entry(values={}) {
-  aria2Seq += 1;
-  const index = aria2Seq;
-  const id = values.id || makeInternalId("aria2");
-  const div = document.createElement("div");
-  div.className = "setup-entry";
-  div.dataset.kind = "aria2";
-  div.innerHTML = `
-    <div class="setup-entry-head">
-      <strong>aria2 实例 #${index}</strong>
-      <button class="remove-btn" type="button">移除</button>
-    </div>
-    <div class="resource-form aria2-form">
-      <input data-field="id" type="hidden" value="${esc(id)}">
-
-      <div class="field field-name">
-        <label>名称</label>
-        <input data-field="name" value="${esc(values.name || ("aria2 实例 " + index))}" required>
-      </div>
-      <div class="field field-enabled">
-        <label>状态</label>
-        <label class="switch-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}><span>启用此实例</span></label>
-      </div>
-
-      <div class="field field-rpc">
-        <label>JSON-RPC 地址</label>
-        <input data-field="url" value="${esc(values.url || "")}" placeholder="http://192.168.1.10:6800/jsonrpc" required>
-      </div>
-      <div class="field field-secret">
-        <label>RPC Secret</label>
-        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="${values.secret_set ? "已保存，留空保持不变" : "未设置可留空"}">
-      </div>
-    </div>`;
-  div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
-  div.querySelector('[data-field="name"]').addEventListener("input", refreshTargetAria2Options);
-  div.querySelector(".remove-btn").addEventListener("click", () => {
-    div.remove();
-    refreshTargetAria2Options();
-  });
-  return div;
+function enabledBadge(enabled) {
+  return enabled === false
+    ? '<span class="badge">已停用</span>'
+    : '<span class="badge success">已启用</span>';
 }
 
-function targetEntry(values={}) {
-  targetSeq += 1;
-  const index = targetSeq;
-  const id = values.id || makeInternalId("target");
-  const div = document.createElement("div");
-  div.className = "setup-entry";
-  div.dataset.kind = "target";
-  div.innerHTML = `
-    <div class="setup-entry-head">
-      <strong>Download Target #${index}</strong>
-      <button class="remove-btn" type="button">移除</button>
-    </div>
-    <div class="setup-grid">
-      <input data-field="id" type="hidden" value="${esc(id)}">
-      <div class="field">
-        <label>名称</label>
-        <input data-field="name" value="${esc(values.name || (index === 1 ? "默认下载" : "下载目标 " + index))}" required>
-      </div>
-      <div class="field">
-        <label>aria2 实例</label>
-        <select data-field="aria2_instance" required></select>
-      </div>
-      <div class="field">
-        <label>默认目标</label>
-        <label class="checkbox-row"><input data-field="default" type="checkbox" ${values.default === true || (values.default === undefined && index === 1) ? "checked" : ""}> 未指定 Target 时使用</label>
-      </div>
-      <div class="field">
-        <label>状态</label>
-        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此目标</label>
-      </div>
-      <div class="field wide">
-        <label>下载目录</label>
-        <input data-field="dir" value="${esc(values.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
-        <span class="hint">填写 aria2 所在机器看到的目录。</span>
-      </div>
+function resourceActions(kind, id) {
+  return `
+    <div class="resource-row-actions">
+      <button class="resource-action edit" type="button" data-action="edit" data-kind="${kind}" data-id="${esc(id)}">编辑</button>
+      <button class="resource-action remove" type="button" data-action="remove" data-kind="${kind}" data-id="${esc(id)}">删除</button>
     </div>`;
+}
 
-  div.querySelector('[data-field="default"]').addEventListener("change", (event) => {
-    if (!event.target.checked) return;
-    $("setupTargets").querySelectorAll('[data-field="default"]').forEach(el => {
-      if (el !== event.target) el.checked = false;
+function emptyResourceList(label) {
+  return `
+    <div class="resource-empty">
+      <div class="empty-icon">+</div>
+      <strong>还没有${esc(label)}</strong>
+      <span>点击右上角按钮添加。</span>
+    </div>`;
+}
+
+function renderResourcePage(view=currentConfigView) {
+  if (view === "accounts") {
+    const items = configState.pikpak_accounts;
+    $("accountResourceCount").textContent = `${items.length} 个账号`;
+    $("accountResourceList").innerHTML = items.length ? items.map(item => `
+      <article class="resource-row">
+        <div class="resource-row-icon purple">P</div>
+        <div class="resource-row-main">
+          <div class="resource-row-title">${esc(item.name || "PikPak 账号")}</div>
+          <div class="resource-row-meta">${esc(item.username || "未填写账号")} · 最大并发 ${item.max_jobs || 2}</div>
+        </div>
+        <div class="resource-row-state">${enabledBadge(item.enabled)}</div>
+        ${resourceActions("account", item.id)}
+      </article>`).join("") : emptyResourceList("PikPak 账号");
+    bindResourceActions($("accountResourceList"));
+    return;
+  }
+
+  if (view === "aria2") {
+    const items = configState.aria2_instances;
+    $("aria2ResourceCount").textContent = `${items.length} 个实例`;
+    $("aria2ResourceList").innerHTML = items.length ? items.map(item => `
+      <article class="resource-row">
+        <div class="resource-row-icon green">A</div>
+        <div class="resource-row-main">
+          <div class="resource-row-title">${esc(item.name || "aria2 实例")}</div>
+          <div class="resource-row-meta">${esc(item.url || "未填写 RPC 地址")}</div>
+        </div>
+        <div class="resource-row-state">${enabledBadge(item.enabled)}</div>
+        ${resourceActions("aria2", item.id)}
+      </article>`).join("") : emptyResourceList("aria2 实例");
+    bindResourceActions($("aria2ResourceList"));
+    return;
+  }
+
+  if (view === "targets") {
+    const items = configState.targets;
+    const instanceName = id => configState.aria2_instances.find(x => x.id === id)?.name || "未关联实例";
+    $("targetResourceCount").textContent = `${items.length} 个目标`;
+    $("targetResourceList").innerHTML = items.length ? items.map(item => `
+      <article class="resource-row">
+        <div class="resource-row-icon orange">T</div>
+        <div class="resource-row-main">
+          <div class="resource-row-title">${esc(item.name || "下载目标")} ${item.default ? '<span class="mini-tag">默认</span>' : ''}</div>
+          <div class="resource-row-meta">${esc(instanceName(item.aria2_instance))} · ${esc(item.dir || "未填写目录")}</div>
+        </div>
+        <div class="resource-row-state">${enabledBadge(item.enabled)}</div>
+        ${resourceActions("target", item.id)}
+      </article>`).join("") : emptyResourceList("下载目标");
+    bindResourceActions($("targetResourceList"));
+  }
+}
+
+function bindResourceActions(container) {
+  container.querySelectorAll("[data-action]").forEach(button => {
+    button.addEventListener("click", async () => {
+      const {action, kind, id} = button.dataset;
+      if (action === "edit") {
+        openResourceDialog(kind, id);
+        return;
+      }
+      if (action === "remove") {
+        await removeResource(kind, id);
+      }
     });
   });
-  div.querySelector(".remove-btn").addEventListener("click", () => {
-    const wasDefault = div.querySelector('[data-field="default"]').checked;
-    div.remove();
-    if (wasDefault) {
-      const first = $("setupTargets").querySelector('[data-field="default"]');
-      if (first) first.checked = true;
+}
+
+function resourceCollection(kind) {
+  if (kind === "account") return configState.pikpak_accounts;
+  if (kind === "aria2") return configState.aria2_instances;
+  return configState.targets;
+}
+
+function openResourceDialog(kind, id="") {
+  const collection = resourceCollection(kind);
+  const existing = id ? collection.find(x => x.id === id) : null;
+  editingResource = {kind, id: existing?.id || ""};
+
+  const dialog = $("resourceDialog");
+  const fields = $("resourceFormFields");
+  const titlePrefix = existing ? "编辑" : "添加";
+
+  if (kind === "account") {
+    $("resourceDialogEyebrow").textContent = "PIKPAK ACCOUNT";
+    $("resourceDialogTitle").textContent = titlePrefix + " PikPak 账号";
+    const internalId = existing?.id || makeInternalId("pp");
+    fields.innerHTML = `
+      <input data-field="id" type="hidden" value="${esc(internalId)}">
+      <div class="modal-field-grid two">
+        <div class="field">
+          <label>名称</label>
+          <input data-field="name" value="${esc(existing?.name || "")}" placeholder="例如：主账号" required>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <label class="switch-row"><input data-field="enabled" type="checkbox" ${existing?.enabled === false ? "" : "checked"}><span>启用此账号</span></label>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-group-title">登录凭据</div>
+        <div class="modal-field-grid two">
+          <div class="field">
+            <label>账号</label>
+            <input data-field="username" value="${esc(existing?.username || "")}" autocomplete="username" placeholder="邮箱或手机号" required>
+          </div>
+          <div class="field">
+            <label>密码</label>
+            <input data-field="password" type="password" autocomplete="new-password" placeholder="${existing?.password_set ? "已保存，留空保持不变" : "PikPak 登录密码"}" ${existing?.password_set ? "" : "required"}>
+          </div>
+        </div>
+      </div>
+      <div class="field compact-field">
+        <label>最大并发离线任务</label>
+        <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(existing?.max_jobs || 2)}" required>
+        <span class="hint">此账号同时处理的 PikPak 离线任务上限。</span>
+      </div>`;
+  } else if (kind === "aria2") {
+    $("resourceDialogEyebrow").textContent = "ARIA2 INSTANCE";
+    $("resourceDialogTitle").textContent = titlePrefix + " aria2 实例";
+    const internalId = existing?.id || makeInternalId("aria2");
+    fields.innerHTML = `
+      <input data-field="id" type="hidden" value="${esc(internalId)}">
+      <div class="modal-field-grid two">
+        <div class="field">
+          <label>名称</label>
+          <input data-field="name" value="${esc(existing?.name || "")}" placeholder="例如：Unraid" required>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <label class="switch-row"><input data-field="enabled" type="checkbox" ${existing?.enabled === false ? "" : "checked"}><span>启用此实例</span></label>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="form-group-title">JSON-RPC 连接</div>
+        <div class="field">
+          <label>RPC 地址</label>
+          <input data-field="url" value="${esc(existing?.url || "")}" placeholder="http://192.168.1.10:6800/jsonrpc" required>
+        </div>
+        <div class="field">
+          <label>RPC Secret</label>
+          <input data-field="secret" type="password" autocomplete="new-password" placeholder="${existing?.secret_set ? "已保存，留空保持不变" : "未设置可留空"}">
+        </div>
+      </div>`;
+  } else {
+    if (!configState.aria2_instances.length) {
+      toast("请先添加 aria2 实例。", true);
+      return;
     }
+    $("resourceDialogEyebrow").textContent = "DOWNLOAD TARGET";
+    $("resourceDialogTitle").textContent = titlePrefix + "下载目标";
+    const internalId = existing?.id || makeInternalId("target");
+    fields.innerHTML = `
+      <input data-field="id" type="hidden" value="${esc(internalId)}">
+      <div class="modal-field-grid two">
+        <div class="field">
+          <label>名称</label>
+          <input data-field="name" value="${esc(existing?.name || "")}" placeholder="例如：电影" required>
+        </div>
+        <div class="field">
+          <label>状态</label>
+          <label class="switch-row"><input data-field="enabled" type="checkbox" ${existing?.enabled === false ? "" : "checked"}><span>启用此目标</span></label>
+        </div>
+      </div>
+      <div class="form-group">
+        <div class="field">
+          <label>aria2 实例</label>
+          <select data-field="aria2_instance" required>
+            ${configState.aria2_instances.map(x => `<option value="${esc(x.id)}" ${x.id === existing?.aria2_instance ? "selected" : ""}>${esc(x.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>下载目录</label>
+          <input data-field="dir" value="${esc(existing?.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
+        </div>
+      </div>
+      <div class="modal-field-grid two">
+        <div class="field">
+          <label>默认目标</label>
+          <label class="switch-row"><input data-field="default" type="checkbox" ${existing?.default ? "checked" : ""}><span>未指定时使用</span></label>
+        </div>
+      </div>`;
+  }
+
+  dialog.showModal();
+}
+
+function readResourceForm() {
+  const root = $("resourceFormFields");
+  const kind = editingResource.kind;
+  const value = field => root.querySelector(`[data-field="${field}"]`)?.value ?? "";
+  const checked = field => Boolean(root.querySelector(`[data-field="${field}"]`)?.checked);
+
+  if (kind === "account") {
+    return {
+      id: value("id"),
+      name: value("name").trim(),
+      username: value("username").trim(),
+      password: value("password"),
+      max_jobs: Number(value("max_jobs") || 2),
+      enabled: checked("enabled")
+    };
+  }
+  if (kind === "aria2") {
+    return {
+      id: value("id"),
+      name: value("name").trim(),
+      url: value("url").trim(),
+      secret: value("secret"),
+      enabled: checked("enabled")
+    };
+  }
+  return {
+    id: value("id"),
+    name: value("name").trim(),
+    aria2_instance: value("aria2_instance"),
+    dir: value("dir").trim(),
+    default: checked("default"),
+    enabled: checked("enabled")
+  };
+}
+
+function payloadFromConfigState() {
+  return {
+    pikpak_accounts: configState.pikpak_accounts.map(x => ({
+      id:x.id, name:x.name, username:x.username, password:x.password || "",
+      max_jobs:x.max_jobs || 2, enabled:x.enabled !== false
+    })),
+    aria2_instances: configState.aria2_instances.map(x => ({
+      id:x.id, name:x.name, url:x.url, secret:x.secret || "", enabled:x.enabled !== false
+    })),
+    targets: configState.targets.map(x => ({
+      id:x.id, name:x.name, aria2_instance:x.aria2_instance, dir:x.dir,
+      default:Boolean(x.default), enabled:x.enabled !== false
+    }))
+  };
+}
+
+async function persistConfigState() {
+  const payload = payloadFromConfigState();
+  await request(appConfigured ? "/api/v1/config" : "/api/v1/setup", {
+    method: appConfigured ? "PUT" : "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
   });
-  requestAnimationFrame(() => {
-    refreshTargetAria2Options();
-    if (values.aria2_instance) {
-      div.querySelector('[data-field="aria2_instance"]').value = values.aria2_instance;
-    }
-  });
-  return div;
+  appConfigured = true;
+  configState = normalizeConfigData(await request("/api/v1/config"));
+  renderResourcePage(currentConfigView);
+  await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
 }
 
-function resetConfigForm() {
-  $("setupAccounts").innerHTML = "";
-  $("setupAria2").innerHTML = "";
-  $("setupTargets").innerHTML = "";
-  accountSeq = 0;
-  aria2Seq = 0;
-  targetSeq = 0;
+async function saveResource() {
+  const next = readResourceForm();
+  const collection = resourceCollection(editingResource.kind);
+  const existingIndex = collection.findIndex(x => x.id === next.id);
+
+  if (editingResource.kind === "account" && existingIndex >= 0 && !next.password) {
+    next.password_set = collection[existingIndex].password_set;
+  }
+  if (editingResource.kind === "aria2" && existingIndex >= 0 && !next.secret) {
+    next.secret_set = collection[existingIndex].secret_set;
+  }
+  if (editingResource.kind === "target" && next.default) {
+    configState.targets.forEach(x => x.default = false);
+  }
+
+  if (existingIndex >= 0) collection[existingIndex] = {...collection[existingIndex], ...next};
+  else collection.push(next);
+
+  try {
+    $("resourceSaveBtn").disabled = true;
+    await persistConfigState();
+    $("resourceDialog").close();
+    toast("配置已保存并生效。");
+  } catch (err) {
+    toast("保存失败：" + err.message, true);
+  } finally {
+    $("resourceSaveBtn").disabled = false;
+  }
 }
 
-function configuredAria2Options() {
-  return [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
-    id: row.querySelector('[data-field="id"]').value.trim(),
-    name: row.querySelector('[data-field="name"]').value.trim()
-  })).filter(x => x.id);
-}
+async function removeResource(kind, id) {
+  const collection = resourceCollection(kind);
+  const item = collection.find(x => x.id === id);
+  if (!item) return;
+  if (!window.confirm(`确定删除“${item.name}”吗？`)) return;
 
-function refreshTargetAria2Options() {
-  const instances = configuredAria2Options();
-  $("setupTargets").querySelectorAll('[data-field="aria2_instance"]').forEach(select => {
-    const current = select.value;
-    select.innerHTML = instances.length
-      ? instances.map(x => `<option value="${esc(x.id)}">${esc(x.name || x.id)} · ${esc(x.id)}</option>`).join("")
-      : '<option value="">请先添加 aria2 实例</option>';
-    if (instances.some(x => x.id === current)) select.value = current;
-  });
-}
-
-function collectSetup() {
-  const accounts = [...$("setupAccounts").querySelectorAll(".setup-entry")].map(row => ({
-    id: row.querySelector('[data-field="id"]').value.trim(),
-    name: row.querySelector('[data-field="name"]').value.trim(),
-    username: row.querySelector('[data-field="username"]').value.trim(),
-    password: row.querySelector('[data-field="password"]').value,
-    max_jobs: Number(row.querySelector('[data-field="max_jobs"]').value),
-    enabled: row.querySelector('[data-field="enabled"]').checked
-  }));
-  const instances = [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
-    id: row.querySelector('[data-field="id"]').value.trim(),
-    name: row.querySelector('[data-field="name"]').value.trim(),
-    url: row.querySelector('[data-field="url"]').value.trim(),
-    secret: row.querySelector('[data-field="secret"]').value,
-    enabled: row.querySelector('[data-field="enabled"]').checked
-  }));
-  const targets = [...$("setupTargets").querySelectorAll(".setup-entry")].map(row => ({
-    id: row.querySelector('[data-field="id"]').value.trim(),
-    name: row.querySelector('[data-field="name"]').value.trim(),
-    aria2_instance: row.querySelector('[data-field="aria2_instance"]').value,
-    dir: row.querySelector('[data-field="dir"]').value.trim(),
-    default: row.querySelector('[data-field="default"]').checked,
-    enabled: row.querySelector('[data-field="enabled"]').checked
-  }));
-  return {pikpak_accounts: accounts, aria2_instances: instances, targets};
+  const index = collection.findIndex(x => x.id === id);
+  collection.splice(index, 1);
+  try {
+    await persistConfigState();
+    toast("已删除。");
+  } catch (err) {
+    collection.splice(index, 0, item);
+    renderResourcePage(currentConfigView);
+    toast("删除失败：" + err.message, true);
+  }
 }
 
 async function loadHealth() {
@@ -614,38 +739,18 @@ document.querySelectorAll("[data-config-view]").forEach(button => {
 
 $("settingsCancelBtn").addEventListener("click", showHome);
 
-$("addAccountBtn").addEventListener("click", () => {
-  $("setupAccounts").appendChild(accountEntry());
-});
-$("addAria2Btn").addEventListener("click", () => {
-  $("setupAria2").appendChild(aria2Entry());
-  refreshTargetAria2Options();
-});
-$("addTargetBtn").addEventListener("click", () => {
-  $("setupTargets").appendChild(targetEntry());
-  refreshTargetAria2Options();
-});
+$("addAccountBtn").addEventListener("click", () => openResourceDialog("account"));
+$("addAria2Btn").addEventListener("click", () => openResourceDialog("aria2"));
+$("addTargetBtn").addEventListener("click", () => openResourceDialog("target"));
 
-$("setupForm").addEventListener("submit", async (event) => {
+$("resourceDialogClose").addEventListener("click", () => $("resourceDialog").close());
+$("resourceCancelBtn").addEventListener("click", () => $("resourceDialog").close());
+$("resourceDialog").addEventListener("click", event => {
+  if (event.target === $("resourceDialog")) $("resourceDialog").close();
+});
+$("resourceForm").addEventListener("submit", async event => {
   event.preventDefault();
-  const button = $("setupSubmitBtn");
-  button.disabled = true;
-  try {
-    const payload = collectSetup();
-    await request(appConfigured ? "/api/v1/config" : "/api/v1/setup", {
-      method: appConfigured ? "PUT" : "POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify(payload)
-    });
-    appConfigured = true;
-    toast("配置已保存并生效。");
-    await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
-    await openConfigView(currentConfigView);
-  } catch (err) {
-    toast("保存失败：" + err.message, true);
-  } finally {
-    button.disabled = false;
-  }
+  await saveResource();
 });
 
 $("taskForm").addEventListener("submit", async (event) => {
