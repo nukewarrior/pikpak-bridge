@@ -588,10 +588,17 @@ func TestPikPakEOFStopsAfterTenRetries(t *testing.T) {
 		if download.EOFRetryCount != i {
 			t.Fatalf("attempt %d: want EOF count %d, got %d", i, i, download.EOFRetryCount)
 		}
+		if download.Status != domain.DownloadPending {
+			t.Fatalf("retry %d should still be pending, got %s", i, download.Status)
+		}
 	}
 
+	_ = w.retryPikPakEOF(context.Background(), &download, message)
 	if download.Status != domain.DownloadError {
-		t.Fatalf("want ERROR after ten EOF retries, got %s", download.Status)
+		t.Fatalf("want ERROR only after the tenth retry also failed, got %s", download.Status)
+	}
+	if download.EOFRetryCount != 10 {
+		t.Fatalf("want EOF retry count to stay at 10, got %d", download.EOFRetryCount)
 	}
 	if download.NextAttemptAt != nil {
 		t.Fatal("exhausted EOF retry should not schedule another attempt")
@@ -601,8 +608,8 @@ func TestPikPakEOFStopsAfterTenRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 10 {
-		t.Fatalf("want 10 EOF history events, got %d", len(events))
+	if len(events) != 11 {
+		t.Fatalf("want 10 retry events plus one exhausted event, got %d", len(events))
 	}
 	if events[0].Type != "aria2.eof_exhausted" {
 		t.Fatalf("latest event should be eof exhausted, got %s", events[0].Type)
