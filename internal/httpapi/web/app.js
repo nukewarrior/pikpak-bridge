@@ -42,7 +42,7 @@ const TERMINAL_TASKS = new Set([
 ]);
 
 const ERROR_EVENT_HINTS = [
-  "failed","retry","error","eof","rejected","missing","manual_retry","stalled","cancel"
+  "failed","retry","error","eof","rejected","missing","manual_retry","stalled"
 ];
 
 function isErrorHistoryEvent(event) {
