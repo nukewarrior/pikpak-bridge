@@ -25,19 +25,19 @@
           <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3Z"/></svg>
           <span>首页</span>
         </button>
-        <button id="accountNav" class="nav-item" type="button" data-config-section="accountSection">
+        <button id="accountNav" class="nav-item" type="button" data-config-view="accounts">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
           <span>PikPak 账号</span>
         </button>
-        <button id="aria2Nav" class="nav-item" type="button" data-config-section="aria2Section">
+        <button id="aria2Nav" class="nav-item" type="button" data-config-view="aria2">
           <svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="5" rx="2"/><rect x="4" y="14" width="16" height="5" rx="2"/><path d="M8 7.5h.01M8 16.5h.01"/></svg>
           <span>aria2 实例</span>
         </button>
-        <button id="targetNav" class="nav-item" type="button" data-config-section="targetSection">
+        <button id="targetNav" class="nav-item" type="button" data-config-view="targets">
           <svg viewBox="0 0 24 24"><path d="M3 6.5h7l2 2h9v10.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
           <span>下载目标</span>
         </button>
-        <button id="settingsNav" class="nav-item" type="button" data-config-section="">
+        <button id="settingsNav" class="nav-item" type="button" data-config-view="settings">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.83 2.83-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.83-2.83.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H3v-4h.1A1.7 1.7 0 0 0 4.6 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06 2.83-2.83.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3h4v.1A1.7 1.7 0 0 0 15.4 4.6a1.7 1.7 0 0 0 1.88-.34l.06-.06 2.83 2.83-.06.06A1.7 1.7 0 0 0 19.4 9c.18.37.47.68.82.9.33.2.71.31 1.1.3H21v4h-.1A1.7 1.7 0 0 0 19.4 15Z"/></svg>
           <span>设置</span>
         </button>
@@ -115,7 +115,7 @@
       <main id="setupScreen" class="setup-screen hidden">
         <div class="settings-header">
           <div>
-            <span class="eyebrow">SETTINGS</span>
+            <span id="setupEyebrow" class="eyebrow">SETTINGS</span>
             <h2 id="setupTitle">配置 PikPak Bridge</h2>
             <p id="setupDescription">按需配置资源，未配置完整也可以正常进入主页。</p>
           </div>
@@ -123,7 +123,7 @@
         </div>
 
         <form id="setupForm" class="setup-form">
-          <section id="accountSection" class="editor-card">
+          <section id="accountSection" class="editor-card resource-page hidden">
             <div class="editor-head">
               <div>
                 <span class="editor-kicker purple">PIKPAK</span>
@@ -135,7 +135,7 @@
             <div id="setupAccounts" class="setup-list"></div>
           </section>
 
-          <section id="aria2Section" class="editor-card">
+          <section id="aria2Section" class="editor-card resource-page hidden">
             <div class="editor-head">
               <div>
                 <span class="editor-kicker green">ARIA2</span>
@@ -147,7 +147,7 @@
             <div id="setupAria2" class="setup-list"></div>
           </section>
 
-          <section id="targetSection" class="editor-card">
+          <section id="targetSection" class="editor-card resource-page hidden">
             <div class="editor-head">
               <div>
                 <span class="editor-kicker orange">TARGETS</span>
@@ -159,7 +159,33 @@
             <div id="setupTargets" class="setup-list"></div>
           </section>
 
-          <div class="setup-actions">
+          <section id="generalSection" class="editor-card resource-page hidden">
+            <div class="editor-head">
+              <div>
+                <span class="editor-kicker">GENERAL</span>
+                <h3>设置</h3>
+                <p>资源配置已拆分到左侧独立页面。这里保留全局设置入口。</p>
+              </div>
+            </div>
+            <div class="general-settings">
+              <div class="general-setting-row">
+                <div>
+                  <strong>配置文件</strong>
+                  <span>/data/config.yaml</span>
+                </div>
+                <span class="badge success">热重载</span>
+              </div>
+              <div class="general-setting-row">
+                <div>
+                  <strong>全局高级参数</strong>
+                  <span>调度、清理等参数暂不在 Web UI 暴露。</span>
+                </div>
+                <span class="muted-label">暂不可编辑</span>
+              </div>
+            </div>
+          </section>
+
+          <div id="setupActions" class="setup-actions">
             <div>
               <strong>配置保存到 /data/config.yaml</strong>
               <span>保存后立即热重载，不需要重启容器。</span>
