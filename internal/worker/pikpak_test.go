@@ -341,3 +341,27 @@ func TestWorkerWaitsForQuotaRefreshWhenAllEnabledAccountsExhausted(t *testing.T)
 		t.Fatalf("repeated quota checks must not duplicate wait events: %#v", events)
 	}
 }
+
+
+func TestNextQuotaRefreshAtRespectsAccountCooldown(t *testing.T) {
+	now := time.Now().UTC()
+	w := New(nil, nil, Options{
+		AccountIDs:     []string{"pp1"},
+		QuotaRefresh:   5 * time.Minute,
+		WorkerInterval: 2 * time.Second,
+	})
+	runtime := w.runtime("pp1")
+	runtime.has = true
+	runtime.snapshot = pikpak.AccountSnapshot{
+		ID:             "pp1",
+		Enabled:        true,
+		QuotaRemaining: 0,
+	}
+	runtime.refreshed = now.Add(-10 * time.Minute)
+	runtime.cooldown = now.Add(20 * time.Minute)
+
+	got := w.nextQuotaRefreshAt(now)
+	if !got.Equal(runtime.cooldown) {
+		t.Fatalf("want cooldown end %s, got %s", runtime.cooldown, got)
+	}
+}

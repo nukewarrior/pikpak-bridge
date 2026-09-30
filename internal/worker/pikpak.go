@@ -553,6 +553,9 @@ func (w *Worker) nextQuotaRefreshAt(now time.Time) time.Time {
 			continue
 		}
 		candidate := runtime.refreshed.Add(w.options.QuotaRefresh)
+		if runtime.cooldown.After(now) && runtime.cooldown.After(candidate) {
+			candidate = runtime.cooldown
+		}
 		if !found || candidate.Before(next) {
 			next = candidate
 			found = true
