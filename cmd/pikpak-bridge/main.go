@@ -24,13 +24,13 @@ func main() {
 
 	cfg, configured, err := config.LoadOptional(cfgPath)
 	if err != nil {
-		slog.Error("load config", "error", err)
+		slog.Error("加载配置失败", "error", err)
 		os.Exit(1)
 	}
 
 	db, err := store.Open(cfg.Database.Path)
 	if err != nil {
-		slog.Error("open database", "error", err)
+		slog.Error("打开数据库失败", "error", err)
 		os.Exit(1)
 	}
 	defer db.Close()
@@ -40,12 +40,12 @@ func main() {
 
 	runtime, err := app.NewRuntime(ctx, db, cfgPath, cfg, configured)
 	if err != nil {
-		slog.Error("start runtime", "error", err)
+		slog.Error("启动运行时失败", "error", err)
 		os.Exit(1)
 	}
 
 	if !configured {
-		slog.Info("first-run setup required", "url", "http://0.0.0.0:8080/")
+		slog.Info("首次启动：资源尚未配置", "url", "http://0.0.0.0:8080/")
 	}
 
 	api := httpapi.New(db, httpapi.WithRuntime(runtime))
@@ -57,7 +57,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("pikpak-bridge listening", "addr", cfg.Server.Listen)
+		slog.Info("pikpak-bridge 已启动并监听", "addr", cfg.Server.Listen)
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -66,12 +66,12 @@ func main() {
 	select {
 	case <-ctx.Done():
 	case err := <-errCh:
-		slog.Error("http server stopped", "error", err)
+		slog.Error("HTTP 服务异常停止", "error", err)
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		slog.Error("graceful shutdown", "error", err)
+		slog.Error("服务优雅关闭失败", "error", err)
 	}
 }
