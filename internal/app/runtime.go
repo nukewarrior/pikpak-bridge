@@ -268,6 +268,13 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 	if err != nil {
 		return workerSet{}, fmt.Errorf("pikpak.status_interval: %w", err)
 	}
+	stallTimeout, err := time.ParseDuration(cfg.PikPak.StallTimeout)
+	if err != nil {
+		return workerSet{}, fmt.Errorf("pikpak.stall_timeout: %w", err)
+	}
+	if stallTimeout <= 0 {
+		return workerSet{}, fmt.Errorf("pikpak.stall_timeout must be greater than zero")
+	}
 	aria2Status, err := time.ParseDuration(cfg.Aria2.StatusInterval)
 	if err != nil {
 		return workerSet{}, fmt.Errorf("aria2.status_interval: %w", err)
@@ -304,6 +311,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			WorkerInterval:          workerInterval,
 			QuotaRefresh:            quotaRefresh,
 			StatusInterval:          pikpakStatus,
+			StallTimeout:            stallTimeout,
 			RetryInterval:           retryInterval,
 			MaxRetry:                cfg.Scheduler.MaxRetry,
 			MinFreeSpace:            minFreeSpace,
