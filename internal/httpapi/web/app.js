@@ -231,23 +231,8 @@ async function openConfigView(view="accounts") {
 }
 
 function taskTitle(task) {
-  const source = String(task.source || "");
-  if (source.startsWith("magnet:?")) {
-    try {
-      const params = new URLSearchParams(source.slice(source.indexOf("?") + 1));
-      const dn = params.get("dn");
-      if (dn) return dn;
-    } catch (_) {}
-    return "Magnet 下载任务";
-  }
-  try {
-    const url = new URL(source);
-    const last = url.pathname.split("/").filter(Boolean).pop();
-    if (last) return decodeURIComponent(last);
-    return url.hostname || source;
-  } catch (_) {
-    return truncate(source, 58) || "下载任务";
-  }
+  const name = String(task.name || "").trim();
+  return name || "下载任务";
 }
 
 function sourceIcon() {
@@ -815,7 +800,7 @@ async function loadTasks() {
           <div class="task-main">
             <div class="task-icon">${sourceIcon()}</div>
             <div style="min-width:0">
-              <div class="task-name" title="${esc(task.source)}">${esc(taskTitle(task))}</div>
+              <div class="task-name" title="${esc(taskTitle(task))}">${esc(taskTitle(task))}</div>
               <div class="task-meta">PikPak: ${esc(account)} · 目标: ${esc(target)} · aria2: ${esc(task.aria2_instance_id || "—")}</div>
             </div>
           </div>
@@ -883,7 +868,7 @@ function renderHistoryTasks(tasks) {
         <div class="task-main">
           <div class="task-icon">${sourceIcon()}</div>
           <div style="min-width:0">
-            <div class="task-name" title="${esc(task.source)}">${esc(taskTitle(task))}</div>
+            <div class="task-name" title="${esc(taskTitle(task))}">${esc(taskTitle(task))}</div>
             <div class="task-meta">PikPak: ${esc(account)} · 目标: ${esc(target)} · aria2: ${esc(task.aria2_instance_id || "—")}</div>
             ${error}
           </div>
@@ -946,6 +931,7 @@ async function openTask(id) {
     $("dialogBody").innerHTML = `
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
+        <dt>任务名称</dt><dd>${esc(taskTitle(task))}</dd>
         <dt>来源</dt><dd>${esc(task.source)}</dd>
         <dt>Download Target</dt><dd>${esc(task.target_name || "—")} (${esc(task.target_id || "—")})</dd>
         <dt>aria2 实例</dt><dd>${esc(task.aria2_instance_id || "—")}</dd>
