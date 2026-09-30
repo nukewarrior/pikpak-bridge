@@ -24,11 +24,14 @@ type taskStore interface {
 	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
 	ListDownloads(context.Context, string) ([]domain.Download, error)
+	ActiveResourceReferences(context.Context) ([]string, []string, error)
 }
 
 type runtimeManager interface {
 	Configured() bool
+	CurrentConfig() *config.Config
 	ApplySetup(context.Context, *config.Config) error
+	ApplyConfig(context.Context, *config.Config) error
 	AccountIDs() []string
 	RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error)
 	Aria2Snapshots(context.Context) []aria2.InstanceSnapshot
@@ -68,6 +71,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/setup", s.setupStatus)
 	s.mux.HandleFunc("POST /api/v1/setup", s.completeSetup)
 	s.mux.HandleFunc("GET /api/v1/status", s.runtimeStatus)
+	s.mux.HandleFunc("GET /api/v1/config", s.getConfig)
+	s.mux.HandleFunc("PUT /api/v1/config", s.updateConfig)
 	s.mux.HandleFunc("GET /api/v1/targets", s.listTargets)
 	s.mux.HandleFunc("POST /api/v1/tasks", s.createTask)
 	s.mux.HandleFunc("POST /api/v1/tasks/text", s.createTaskText)
@@ -102,13 +107,15 @@ type setupPikPakAccount struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 	MaxJobs  int    `json:"max_jobs"`
+	Enabled  *bool  `json:"enabled,omitempty"`
 }
 
 type setupAria2Instance struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	URL       string `json:"url"`
-	Secret    string `json:"secret"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	URL     string `json:"url"`
+	Secret  string `json:"secret"`
+	Enabled *bool  `json:"enabled,omitempty"`
 }
 
 type setupTarget struct {
@@ -117,6 +124,7 @@ type setupTarget struct {
 	Aria2InstanceID string `json:"aria2_instance"`
 	Dir             string `json:"dir"`
 	Default         bool   `json:"default"`
+	Enabled         *bool  `json:"enabled,omitempty"`
 }
 
 func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
@@ -154,6 +162,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 			Username: strings.TrimSpace(account.Username),
 			Password: account.Password,
 			MaxJobs:  maxJobs,
+			Enabled:  account.Enabled,
 		})
 	}
 
@@ -164,6 +173,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 			Name:      strings.TrimSpace(instance.Name),
 			URL:       strings.TrimSpace(instance.URL),
 			Secret:    instance.Secret,
+			Enabled:   instance.Enabled,
 		})
 	}
 
@@ -175,6 +185,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 			Aria2InstanceID: strings.TrimSpace(target.Aria2InstanceID),
 			Dir:             strings.TrimSpace(target.Dir),
 			Default:         target.Default,
+			Enabled:         target.Enabled,
 		})
 	}
 
