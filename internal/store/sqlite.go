@@ -57,7 +57,7 @@ func (s *SQLite) init(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
 			source_type TEXT NOT NULL,
-			source_key TEXT NOT NULL,
+			source_key TEXT NOT NULL UNIQUE,
 			target_id TEXT NOT NULL,
 			target_name TEXT NOT NULL,
 			aria2_instance_id TEXT NOT NULL,
@@ -71,8 +71,7 @@ func (s *SQLite) init(ctx context.Context) error {
 			error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			completed_at TEXT,
-			UNIQUE(source_key, target_id)
+			completed_at TEXT
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);`,
@@ -164,10 +163,10 @@ func (s *SQLite) GetTask(ctx context.Context, id string) (domain.Task, error) {
 	return scan(s.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))
 }
 
-func (s *SQLite) GetTaskBySourceTarget(ctx context.Context, sourceKey, targetID string) (domain.Task, error) {
+func (s *SQLite) GetTaskBySourceKey(ctx context.Context, sourceKey string) (domain.Task, error) {
 	return scan(s.db.QueryRowContext(ctx,
-		"SELECT "+taskColumns+" FROM tasks WHERE source_key = ? AND target_id = ?",
-		sourceKey, targetID,
+		"SELECT "+taskColumns+" FROM tasks WHERE source_key = ?",
+		sourceKey,
 	))
 }
 
