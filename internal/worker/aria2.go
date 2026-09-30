@@ -368,35 +368,35 @@ func (w *Aria2Worker) retryPikPakEOF(ctx context.Context, download *domain.Downl
 		return w.retryPollDownload(ctx, download, errors.New(message))
 	}
 
-	download.EOFRetryCount++
 	download.LastError = message
-	attempt := download.EOFRetryCount
-
-	if attempt >= w.options.MaxRetry {
+	if download.EOFRetryCount >= w.options.MaxRetry {
 		download.Status = domain.DownloadError
 		download.NextAttemptAt = nil
 		if err := w.store.SaveDownload(ctx, download); err != nil {
 			return err
 		}
-		eventMessage := fmt.Sprintf("PikPak 下载 EOF，第 %d/%d 次重试仍失败：%s", attempt, w.options.MaxRetry, message)
+		eventMessage := fmt.Sprintf("PikPak 下载 EOF，已完成 %d/%d 次重试仍失败：%s",
+			download.EOFRetryCount, w.options.MaxRetry, message)
 		w.recordTaskEvent(ctx, download.TaskID, "aria2.eof_exhausted", eventMessage)
 		slog.Warn("PikPak 下载 EOF 已耗尽重试次数",
 			"task_id", download.TaskID,
 			"file_id", download.PikPakFileID,
 			"gid", download.Aria2GID,
-			"eof_retry_count", attempt,
+			"eof_retry_count", download.EOFRetryCount,
 			"max_retry", w.options.MaxRetry,
 			"error", message,
 		)
 		return errors.New(eventMessage)
 	}
 
+	download.EOFRetryCount++
+	attempt := download.EOFRetryCount
 	download.Status = domain.DownloadPending
 	download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
 	if err := w.store.SaveDownload(ctx, download); err != nil {
 		return err
 	}
-	eventMessage := fmt.Sprintf("PikPak 下载 EOF，第 %d/%d 次重试：%s", attempt, w.options.MaxRetry, message)
+	eventMessage := fmt.Sprintf("PikPak 下载 EOF，准备第 %d/%d 次重试：%s", attempt, w.options.MaxRetry, message)
 	w.recordTaskEvent(ctx, download.TaskID, "aria2.eof_retry", eventMessage)
 	slog.Warn("检测到 PikPak 下载 EOF，已删除 aria2 失败记录并准备重新下载",
 		"task_id", download.TaskID,
