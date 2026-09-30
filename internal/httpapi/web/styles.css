@@ -1102,3 +1102,217 @@ dialog::backdrop {
     max-width: none;
   }
 }
+
+
+/* Resource list management */
+.resource-toolbar {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,.92);
+  box-shadow: var(--shadow-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.resource-toolbar > div {
+  display: grid;
+  gap: 4px;
+}
+.resource-toolbar strong {
+  color: #35425a;
+  font-size: 12px;
+}
+.resource-toolbar span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.primary-btn.compact {
+  min-height: 38px;
+  padding-inline: 14px;
+  font-size: 11px;
+}
+
+.resource-list {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+}
+.resource-row {
+  min-height: 74px;
+  padding: 14px 16px;
+  border-top: 1px solid #edf1f7;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+}
+.resource-row:first-child { border-top: 0; }
+.resource-row:hover { background: #fbfcff; }
+
+.resource-row-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  font-weight: 850;
+}
+.resource-row-icon.purple {
+  color: var(--purple);
+  background: var(--purple-soft);
+}
+.resource-row-icon.green {
+  color: var(--green);
+  background: var(--green-soft);
+}
+.resource-row-icon.orange {
+  color: var(--orange);
+  background: var(--orange-soft);
+}
+.resource-row-main { min-width: 0; }
+.resource-row-title {
+  color: #26334b;
+  font-size: 12px;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-row-meta {
+  margin-top: 5px;
+  color: #8997ae;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.resource-row-state { justify-self: end; }
+.resource-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.resource-action {
+  min-height: 32px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: #65738c;
+  font-size: 10px;
+}
+.resource-action:hover {
+  color: var(--blue);
+  border-color: #cfd9ed;
+}
+.resource-action.remove:hover {
+  color: var(--red);
+  border-color: #f0cdd1;
+  background: #fff8f9;
+}
+.mini-tag {
+  margin-left: 6px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 8px;
+  font-weight: 800;
+  vertical-align: 1px;
+}
+.resource-empty {
+  min-height: 180px;
+  padding: 32px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 6px;
+  color: var(--muted);
+  text-align: center;
+}
+.resource-empty strong {
+  color: #63718a;
+  font-size: 12px;
+}
+.resource-empty span { font-size: 10px; }
+
+/* Focused resource dialog */
+.resource-dialog {
+  width: min(650px, calc(100% - 28px));
+  max-height: 88vh;
+}
+.resource-dialog form { margin: 0; }
+.resource-dialog-body {
+  padding: 20px;
+  display: grid;
+  gap: 18px;
+}
+.modal-field-grid {
+  display: grid;
+  gap: 13px;
+}
+.modal-field-grid.two {
+  grid-template-columns: minmax(0, 1fr) 190px;
+}
+.form-group {
+  padding: 15px;
+  border: 1px solid #e7ecf5;
+  border-radius: 12px;
+  background: #fafcff;
+  display: grid;
+  gap: 13px;
+}
+.form-group-title {
+  color: #55647d;
+  font-size: 10px;
+  font-weight: 800;
+}
+.compact-field {
+  max-width: 260px;
+}
+.resource-dialog-actions {
+  position: sticky;
+  bottom: 0;
+  padding: 13px 20px;
+  border-top: 1px solid var(--line);
+  background: rgba(255,255,255,.96);
+  backdrop-filter: blur(12px);
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.resource-dialog-actions .primary-btn {
+  min-width: 92px;
+  min-height: 38px;
+}
+.resource-dialog-actions .ghost-btn {
+  min-width: 72px;
+}
+
+@media (max-width: 680px) {
+  .resource-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .resource-toolbar .primary-btn {
+    width: 100%;
+  }
+  .resource-row {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+  }
+  .resource-row-state { display: none; }
+  .resource-row-actions {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+  .modal-field-grid.two {
+    grid-template-columns: 1fr;
+  }
+  .compact-field { max-width: none; }
+}
