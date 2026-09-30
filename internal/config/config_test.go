@@ -23,10 +23,16 @@ func TestLoadOptionalMissingUsesDefaults(t *testing.T) {
 func TestSaveRoundTripAndPermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := Default()
-	cfg.PikPak.Accounts = []PikPakAccount{{Name: "pp01", Username: "user", Password: "secret"}}
-	cfg.Aria2.Instances = []Aria2Instance{{
-		Name: "nas", URL: "http://aria2:6800/jsonrpc", Dir: "/downloads", MaxActive: 4, Weight: 10,
+	cfg.PikPak.Accounts = []PikPakAccount{{
+		ID: "pp01", Name: "主账号", Username: "user", Password: "secret", MaxJobs: 2,
 	}}
+	cfg.Aria2.Instances = []Aria2Instance{{
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc", MaxActive: 4,
+	}}
+	cfg.Targets = []DownloadTarget{{
+		ID: "movies", Name: "电影", Aria2InstanceID: "nas", Dir: "/downloads/movies", Default: true,
+	}}
+
 	if err := Save(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -37,11 +43,30 @@ func TestSaveRoundTripAndPermissions(t *testing.T) {
 	if info.Mode().Perm() != 0o600 {
 		t.Fatalf("want 0600, got %o", info.Mode().Perm())
 	}
+
 	loaded, err := Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.PikPak.Accounts[0].Password != "secret" || loaded.Aria2.Instances[0].Name != "nas" {
+	if loaded.PikPak.Accounts[0].Password != "secret" ||
+		loaded.Aria2.Instances[0].ID != "nas" ||
+		loaded.Targets[0].Aria2InstanceID != "nas" {
 		t.Fatalf("round trip failed: %#v", loaded)
+	}
+}
+
+func TestValidateRejectsUnknownTargetInstance(t *testing.T) {
+	cfg := Default()
+	cfg.PikPak.Accounts = []PikPakAccount{{
+		ID: "pp01", Name: "主账号", Username: "user", Password: "secret", MaxJobs: 2,
+	}}
+	cfg.Aria2.Instances = []Aria2Instance{{
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc", MaxActive: 4,
+	}}
+	cfg.Targets = []DownloadTarget{{
+		ID: "movies", Name: "电影", Aria2InstanceID: "missing", Dir: "/movies",
+	}}
+	if err := Validate(cfg); err == nil {
+		t.Fatal("expected unknown aria2 instance validation error")
 	}
 }
