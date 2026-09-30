@@ -305,6 +305,9 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	task.PikPakAccountID = selected.ID
 	task.PikPakTaskID = ""
 	task.PikPakRootFileID = ""
+	task.PikPakPhase = ""
+	task.PikPakProgress = 0
+	task.PikPakLastActivityAt = nil
 	task.Status = domain.TaskPikPakSubmitting
 	task.Error = ""
 	task.RetryCount = 0
@@ -346,6 +349,9 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 			task.PikPakAccountID = ""
 			task.PikPakTaskID = ""
 			task.PikPakRootFileID = ""
+			task.PikPakPhase = ""
+			task.PikPakProgress = 0
+			task.PikPakLastActivityAt = nil
 			task.Status = domain.TaskWaitingPikPakAccount
 			task.Error = err.Error()
 			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
