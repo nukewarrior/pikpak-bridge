@@ -80,12 +80,13 @@ func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (Account
 		return base, err
 	}
 
-	active := 0
+	activeTaskIDs := make([]string, 0)
 	for _, task := range tasks {
 		if task.Phase == PhasePending || task.Phase == PhaseRunning {
-			active++
+			activeTaskIDs = append(activeTaskIDs, task.ID)
 		}
 	}
+	active := len(activeTaskIDs)
 
 	quotaTotal := int64(q.Quotas.CloudDownload.Limit)
 	quotaUsage := int64(q.Quotas.CloudDownload.Usage)
@@ -117,6 +118,7 @@ func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (Account
 	base.StorageFree = storageFree
 	base.StorageTotal = storageTotal
 	base.ActiveJobs = active
+	base.ActiveTaskIDs = activeTaskIDs
 	base.LastUsedAt = lastUsed
 	base.State = state
 	return base, nil
