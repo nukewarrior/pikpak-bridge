@@ -39,8 +39,9 @@ type Task struct {
 	PikPakTaskID     string `json:"pikpak_task_id,omitempty"`
 	PikPakRootFileID string `json:"pikpak_root_file_id,omitempty"`
 
-	RetryCount    int        `json:"retry_count"`
-	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	RetryCount       int        `json:"retry_count"`
+	ManualRetryCount int        `json:"manual_retry_count"`
+	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
 	Error         string     `json:"error,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
@@ -80,8 +81,18 @@ type Download struct {
 	TotalLength      int64          `json:"total_length"`
 	CompletedLength  int64          `json:"completed_length"`
 	RetryCount       int            `json:"retry_count"`
+	EOFRetryCount    int            `json:"eof_retry_count"`
 	NextAttemptAt    *time.Time     `json:"next_attempt_at,omitempty"`
 	LastError        string         `json:"last_error,omitempty"`
 	CreatedAt        time.Time      `json:"created_at"`
 	UpdatedAt        time.Time      `json:"updated_at"`
+}
+
+
+type TaskEvent struct {
+	ID        int64     `json:"id"`
+	TaskID    string    `json:"task_id"`
+	Type      string    `json:"type"`
+	Message   string    `json:"message"`
+	CreatedAt time.Time `json:"created_at"`
 }
