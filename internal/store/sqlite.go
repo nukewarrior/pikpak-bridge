@@ -124,15 +124,6 @@ func (s *SQLite) init(ctx context.Context) error {
 			return fmt.Errorf("database init: %w", err)
 		}
 	}
-	for _, stmt := range []string{
-		`ALTER TABLE tasks ADD COLUMN manual_retry_count INTEGER NOT NULL DEFAULT 0`,
-		`ALTER TABLE downloads ADD COLUMN eof_retry_count INTEGER NOT NULL DEFAULT 0`,
-	} {
-		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
-			!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
-			return fmt.Errorf("database migration: %w", err)
-		}
-	}
 	return nil
 }
 
