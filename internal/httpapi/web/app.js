@@ -198,6 +198,15 @@ function makeInternalId(prefix) {
   return prefix + "-" + [...bytes].map(x => x.toString(16).padStart(2, "0")).join("");
 }
 
+function defaultAccountName(username) {
+  const value = String(username || "").trim();
+  if (!value) return "";
+  const at = value.indexOf("@");
+  if (at > 0) return value.slice(0, at);
+  return value;
+}
+
+
 function normalizeConfigData(data={}) {
   return {
     pikpak_accounts: (data.pikpak_accounts || []).map(x => ({...x})),
@@ -321,7 +330,8 @@ function openResourceDialog(kind, id="") {
       <div class="modal-field-grid two">
         <div class="field">
           <label>名称</label>
-          <input data-field="name" value="${esc(existing?.name || "")}" placeholder="例如：主账号" required>
+          <input data-field="name" value="${esc(existing?.name || defaultAccountName(existing?.username))}" placeholder="根据账号自动生成">
+          <span class="hint">默认根据账号生成，也可以手动修改。</span>
         </div>
         <div class="field">
           <label>状态</label>
@@ -413,6 +423,21 @@ function openResourceDialog(kind, id="") {
       </div>`;
   }
 
+  if (kind === "account") {
+    const usernameInput = fields.querySelector('[data-field="username"]');
+    const nameInput = fields.querySelector('[data-field="name"]');
+    let nameManuallyEdited = Boolean(existing?.name && existing.name !== defaultAccountName(existing?.username));
+
+    nameInput.addEventListener("input", () => {
+      nameManuallyEdited = nameInput.value.trim() !== "" && nameInput.value.trim() !== defaultAccountName(usernameInput.value);
+    });
+    usernameInput.addEventListener("input", () => {
+      if (!nameManuallyEdited || !nameInput.value.trim()) {
+        nameInput.value = defaultAccountName(usernameInput.value);
+      }
+    });
+  }
+
   dialog.showModal();
 }
 
@@ -423,10 +448,11 @@ function readResourceForm() {
   const checked = field => Boolean(root.querySelector(`[data-field="${field}"]`)?.checked);
 
   if (kind === "account") {
+    const username = value("username").trim();
     return {
       id: value("id"),
-      name: value("name").trim(),
-      username: value("username").trim(),
+      name: value("name").trim() || defaultAccountName(username),
+      username,
       password: value("password"),
       max_jobs: Number(value("max_jobs") || 2),
       enabled: checked("enabled")
