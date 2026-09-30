@@ -317,7 +317,10 @@ function accountStatusMeta(item) {
   const storage = status.storage_total > 0
     ? `空间 ${fmtBytes(status.storage_free)} / ${fmtBytes(status.storage_total)}`
     : `剩余空间 ${fmtBytes(status.storage_free)}`;
-  const jobs = `并发 ${status.active_jobs || 0} / ${status.max_jobs || item.max_jobs || 0}`;
+  const maxJobs = status.max_jobs || item.max_jobs || 0;
+  const managedJobs = status.managed_active_jobs ?? 0;
+  const remoteJobs = status.active_jobs ?? 0;
+  const jobs = `Bridge 并发 ${managedJobs} / ${maxJobs} · PikPak 远端活动 ${remoteJobs}`;
   return `<div class="resource-health-meta">${esc(quota)} · ${esc(storage)} · ${esc(jobs)}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
 }
 
