@@ -67,6 +67,9 @@ func (s *SQLite) init(ctx context.Context) error {
 			pikpak_account_id TEXT NOT NULL DEFAULT '',
 			pikpak_task_id TEXT NOT NULL DEFAULT '',
 			pikpak_root_file_id TEXT NOT NULL DEFAULT '',
+			pikpak_phase TEXT NOT NULL DEFAULT '',
+			pikpak_progress INTEGER NOT NULL DEFAULT 0,
+			pikpak_last_activity_at TEXT,
 			retry_count INTEGER NOT NULL DEFAULT 0,
 			manual_retry_count INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at TEXT,
@@ -131,6 +134,7 @@ func (s *SQLite) init(ctx context.Context) error {
 const taskColumns = `id, source, source_type, source_key, name,
 	target_id, target_name, aria2_instance_id, download_dir, status,
 	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
+	pikpak_phase, pikpak_progress, pikpak_last_activity_at,
 	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
 
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
@@ -229,6 +233,10 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 	if task.CompletedAt != nil {
 		completedAt = task.CompletedAt.UTC().Format(time.RFC3339Nano)
 	}
+	var pikpakLastActivityAt any
+	if task.PikPakLastActivityAt != nil {
+		pikpakLastActivityAt = task.PikPakLastActivityAt.UTC().Format(time.RFC3339Nano)
+	}
 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET
@@ -237,6 +245,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 			pikpak_account_id = ?,
 			pikpak_task_id = ?,
 			pikpak_root_file_id = ?,
+			pikpak_phase = ?,
+			pikpak_progress = ?,
+			pikpak_last_activity_at = ?,
 			retry_count = ?,
 			manual_retry_count = ?,
 			next_attempt_at = ?,
@@ -250,6 +261,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 		task.PikPakAccountID,
 		task.PikPakTaskID,
 		task.PikPakRootFileID,
+		task.PikPakPhase,
+		task.PikPakProgress,
+		pikpakLastActivityAt,
 		task.RetryCount,
 		task.ManualRetryCount,
 		nextAttempt,
@@ -655,7 +669,7 @@ type scanner interface {
 func scan(row scanner) (domain.Task, error) {
 	var task domain.Task
 	var status, createdAt, updatedAt string
-	var nextAttemptAt, completedAt sql.NullString
+	var nextAttemptAt, completedAt, pikpakLastActivityAt sql.NullString
 	err := row.Scan(
 		&task.ID,
 		&task.Source,
@@ -670,6 +684,9 @@ func scan(row scanner) (domain.Task, error) {
 		&task.PikPakAccountID,
 		&task.PikPakTaskID,
 		&task.PikPakRootFileID,
+		&task.PikPakPhase,
+		&task.PikPakProgress,
+		&pikpakLastActivityAt,
 		&task.RetryCount,
 		&task.ManualRetryCount,
 		&nextAttemptAt,
@@ -697,6 +714,13 @@ func scan(row scanner) (domain.Task, error) {
 			return domain.Task{}, err
 		}
 		task.NextAttemptAt = &value
+	}
+	if pikpakLastActivityAt.Valid {
+		value, err := time.Parse(time.RFC3339Nano, pikpakLastActivityAt.String)
+		if err != nil {
+			return domain.Task{}, err
+		}
+		task.PikPakLastActivityAt = &value
 	}
 	if completedAt.Valid {
 		value, err := time.Parse(time.RFC3339Nano, completedAt.String)
