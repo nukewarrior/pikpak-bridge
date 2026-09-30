@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
@@ -273,13 +274,7 @@ func (w *Aria2Worker) pollDownload(ctx context.Context, download *domain.Downloa
 		return w.retryPollDownload(ctx, download, err)
 	}
 	if status.Status == "error" {
-		_ = w.backend.Forget(ctx, download.Aria2InstanceID, download.Aria2GID)
-		download.Status = domain.DownloadPending
-		message := status.ErrorMessage
-		if message == "" {
-			message = "aria2 error code " + status.ErrorCode
-		}
-		return w.retryDownload(ctx, download, errors.New(message))
+		return w.handleAria2Error(ctx, download, status)
 	}
 	return w.applyStatus(ctx, download, status)
 }
@@ -311,13 +306,45 @@ func (w *Aria2Worker) applyStatus(ctx context.Context, download *domain.Download
 		download.Status = domain.DownloadPaused
 		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 	case "error":
-		download.Status = domain.DownloadPending
-		return w.retryDownload(ctx, download, errors.New(nonEmpty(status.ErrorMessage, "aria2 download failed")))
+		return w.handleAria2Error(ctx, download, status)
 	default:
 		download.Status = domain.DownloadSubmitted
 		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 	}
 	return w.store.SaveDownload(ctx, download)
+}
+
+func (w *Aria2Worker) handleAria2Error(ctx context.Context, download *domain.Download, status aria2.Status) error {
+	message := strings.TrimSpace(status.ErrorMessage)
+	if message == "" {
+		if status.ErrorCode != "" {
+			message = "aria2 错误码 " + status.ErrorCode
+		} else {
+			message = "aria2 下载失败"
+		}
+	}
+
+	oldGID := download.Aria2GID
+	newGID := retryGID(oldGID)
+	download.Aria2GID = newGID
+	download.Status = domain.DownloadPending
+
+	slog.Warn("aria2 下载失败，保留失败记录并准备重试",
+		"task_id", download.TaskID,
+		"file_id", download.PikPakFileID,
+		"old_gid", oldGID,
+		"next_gid", newGID,
+		"error_code", status.ErrorCode,
+		"error_message", status.ErrorMessage,
+		"retry_in", w.options.RetryInterval,
+	)
+
+	return w.retryDownload(ctx, download, errors.New(message))
+}
+
+func retryGID(previous string) string {
+	sum := sha256.Sum256([]byte(previous + "\x00retry"))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (w *Aria2Worker) retryPollDownload(ctx context.Context, download *domain.Download, cause error) error {
