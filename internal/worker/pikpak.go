@@ -18,6 +18,7 @@ import (
 type pikpakStore interface {
 	ListPikPakWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error)
 	PikPakActiveCounts(ctx context.Context) (map[string]int, error)
+	PikPakKnownTaskIDs(ctx context.Context) (map[string]map[string]struct{}, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
 	ReplaceRemoteFiles(ctx context.Context, taskID string, files []domain.RemoteFile) error
 }
@@ -168,6 +169,10 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	if err != nil {
 		return err
 	}
+	knownTaskIDs, err := w.store.PikPakKnownTaskIDs(ctx)
+	if err != nil {
+		return err
+	}
 
 	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
 	for _, id := range w.options.AccountIDs {
@@ -201,13 +206,16 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			snapshot := runtime.snapshot
 			snapshot.CooldownUntil = runtime.cooldown
 			remoteActive := snapshot.ActiveJobs
-			snapshot.ActiveJobs = managedCounts[id] + runtime.reserved
+			externalActive := unmanagedRemoteActive(snapshot, knownTaskIDs[id])
+			snapshot.ActiveJobs = managedCounts[id] + externalActive + runtime.reserved
 			snapshots = append(snapshots, snapshot)
 			if remoteActive != snapshot.ActiveJobs {
-				slog.Debug("PikPak 并发计数以 Bridge 管理任务为准",
+				slog.Debug("PikPak 并发计数已剔除 Bridge 残留远端任务",
 					"account_id", id,
 					"remote_active_jobs", remoteActive,
-					"managed_active_jobs", snapshot.ActiveJobs,
+					"managed_active_jobs", managedCounts[id]+runtime.reserved,
+					"external_active_jobs", externalActive,
+					"effective_active_jobs", snapshot.ActiveJobs,
 				)
 			}
 			continue
@@ -230,7 +238,8 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		}
 		w.noteAccountSuccess(id, snapshot, now)
 		remoteActive := snapshot.ActiveJobs
-		snapshot.ActiveJobs = managedCounts[id] + runtime.reserved
+		externalActive := unmanagedRemoteActive(snapshot, knownTaskIDs[id])
+		snapshot.ActiveJobs = managedCounts[id] + externalActive + runtime.reserved
 		snapshots = append(snapshots, snapshot)
 		slog.Info("PikPak 账号状态已刷新",
 			"account_id", snapshot.ID,
@@ -242,7 +251,9 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			"quota_total", snapshot.QuotaTotal,
 			"storage_free", snapshot.StorageFree,
 			"remote_active_jobs", remoteActive,
-			"managed_active_jobs", snapshot.ActiveJobs,
+			"managed_active_jobs", managedCounts[id]+runtime.reserved,
+			"external_active_jobs", externalActive,
+			"effective_active_jobs", snapshot.ActiveJobs,
 			"max_jobs", snapshot.MaxJobs,
 		)
 	}
@@ -570,6 +581,21 @@ func (w *Worker) retry(
 	task.Status = retryStatus
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
 	return w.store.SaveTask(ctx, task, "pikpak.retry", cause.Error())
+}
+
+func unmanagedRemoteActive(snapshot pikpak.AccountSnapshot, known map[string]struct{}) int {
+	if len(snapshot.ActiveTaskIDs) == 0 {
+		// Older/fake providers may only supply a count. Treat it as external rather than
+		// silently exceeding remote activity we cannot attribute to Bridge.
+		return snapshot.ActiveJobs
+	}
+	count := 0
+	for _, taskID := range snapshot.ActiveTaskIDs {
+		if _, owned := known[taskID]; !owned {
+			count++
+		}
+	}
+	return count
 }
 
 func (w *Worker) waitForAccount(
