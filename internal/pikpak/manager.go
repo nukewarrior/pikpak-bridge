@@ -168,6 +168,28 @@ func (m *Manager) GetOfflineTask(ctx context.Context, accountID, taskID string) 
 	return OfflineTask{}, fmt.Errorf("pikpak offline task %q not found", taskID)
 }
 
+func (m *Manager) CancelOfflineTask(ctx context.Context, accountID, taskID string) error {
+	entry, err := m.get(accountID)
+	if err != nil {
+		return err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("refusing to cancel empty PikPak task ID")
+	}
+	if err := entry.client.Login(ctx); err != nil {
+		return err
+	}
+	if err := entry.client.DeleteOfflineTask(ctx, taskID, false); err != nil {
+		if KindOf(err) == ErrorKindNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (m *Manager) ResolveFiles(ctx context.Context, accountID, rootFileID string) (ResolvedFiles, error) {
 	entry, err := m.get(accountID)
 	if err != nil {
@@ -284,6 +306,7 @@ func mapOfflineTask(task offlineTaskAPI) OfflineTask {
 		ID:         task.ID,
 		Status:     task.Phase,
 		RootFileID: task.FileID,
+		Progress:   task.Progress,
 		Error:      task.Message,
 	}
 }
