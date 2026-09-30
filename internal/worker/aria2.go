@@ -271,6 +271,9 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 func (w *Aria2Worker) pollDownload(ctx context.Context, download *domain.Download) error {
 	status, err := w.backend.TellStatus(ctx, download.Aria2InstanceID, download.Aria2GID)
 	if err != nil {
+		if isPikPakEOFFailure(err.Error()) {
+			return w.retryPikPakEOF(ctx, download, err.Error())
+		}
 		return w.retryPollDownload(ctx, download, err)
 	}
 	if status.Status == "error" {
@@ -316,6 +319,9 @@ func (w *Aria2Worker) applyStatus(ctx context.Context, download *domain.Download
 
 func (w *Aria2Worker) handleAria2Error(ctx context.Context, download *domain.Download, status aria2.Status) error {
 	message := strings.TrimSpace(status.ErrorMessage)
+	if isPikPakEOFFailure(message) {
+		return w.retryPikPakEOF(ctx, download, message)
+	}
 	if message == "" {
 		if status.ErrorCode != "" {
 			message = "aria2 错误码 " + status.ErrorCode
@@ -339,6 +345,34 @@ func (w *Aria2Worker) handleAria2Error(ctx context.Context, download *domain.Dow
 		"retry_in", w.options.RetryInterval,
 	)
 
+	return w.retryDownload(ctx, download, errors.New(message))
+}
+
+func isPikPakEOFFailure(message string) bool {
+	return strings.Contains(strings.ToLower(message), "eof was received")
+}
+
+func (w *Aria2Worker) retryPikPakEOF(ctx context.Context, download *domain.Download, message string) error {
+	if err := w.backend.Forget(ctx, download.Aria2InstanceID, download.Aria2GID); err != nil {
+		slog.Warn("检测到 PikPak 下载 EOF，但清理 aria2 失败记录失败",
+			"task_id", download.TaskID,
+			"file_id", download.PikPakFileID,
+			"gid", download.Aria2GID,
+			"error", err,
+			"retry_in", w.options.RetryInterval,
+		)
+		return w.retryPollDownload(ctx, download, errors.New(message))
+	}
+
+	slog.Warn("检测到 PikPak 下载 EOF，已删除 aria2 失败记录并准备重新下载",
+		"task_id", download.TaskID,
+		"file_id", download.PikPakFileID,
+		"gid", download.Aria2GID,
+		"error", message,
+		"retry_in", w.options.RetryInterval,
+	)
+
+	download.Status = domain.DownloadPending
 	return w.retryDownload(ctx, download, errors.New(message))
 }
 
