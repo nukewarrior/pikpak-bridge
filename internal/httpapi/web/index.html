@@ -25,6 +25,10 @@
           <svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5V21h-6v-6H9v6H3Z"/></svg>
           <span>首页</span>
         </button>
+        <button id="historyNav" class="nav-item" type="button">
+          <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></svg>
+          <span>历史任务</span>
+        </button>
         <button id="accountNav" class="nav-item" type="button" data-config-view="accounts">
           <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
           <span>PikPak 账号</span>
@@ -110,6 +114,35 @@
             </div>
           </div>
         </section>
+      </main>
+
+      <main id="historyView" class="history-view hidden">
+        <div class="history-header">
+          <div>
+            <span class="eyebrow">HISTORY</span>
+            <h2>历史任务</h2>
+            <p>查看已经结束的下载任务。最近最多显示 200 条。</p>
+          </div>
+          <div class="history-filters" role="group" aria-label="历史任务筛选">
+            <button class="history-filter active" type="button" data-history-filter="all">全部</button>
+            <button class="history-filter" type="button" data-history-filter="completed">已完成</button>
+            <button class="history-filter" type="button" data-history-filter="failed">失败</button>
+            <button class="history-filter" type="button" data-history-filter="cancelled">已取消</button>
+          </div>
+        </div>
+
+        <div class="history-summary">
+          <span id="historyTaskCount">0 条记录</span>
+          <span id="historyUpdated">—</span>
+        </div>
+
+        <div id="historyTaskList" class="history-task-list">
+          <div class="empty-state">
+            <div class="empty-icon">↺</div>
+            <strong>暂无历史任务</strong>
+            <span>任务结束后会出现在这里。</span>
+          </div>
+        </div>
       </main>
 
       <main id="setupScreen" class="setup-screen hidden">
