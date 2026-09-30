@@ -44,6 +44,8 @@ let resourceStatus = {pikpak_accounts:{}, aria2_instances:{}, updated_at:null};
 let resourceStatusBusy = false;
 let editingResource = null;
 
+const LAST_TARGET_STORAGE_KEY = "pikpak-bridge:last-target";
+
 function esc(value) {
   return String(value ?? "")
     .replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;")
@@ -54,6 +56,22 @@ function truncate(value, length=72) {
   const s = String(value ?? "");
   return s.length > length ? s.slice(0, length - 1) + "…" : s;
 }
+
+function readLastTarget() {
+  try {
+    return localStorage.getItem(LAST_TARGET_STORAGE_KEY) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function rememberLastTarget(id) {
+  try {
+    if (id) localStorage.setItem(LAST_TARGET_STORAGE_KEY, id);
+    else localStorage.removeItem(LAST_TARGET_STORAGE_KEY);
+  } catch (_) {}
+}
+
 
 function statusBadge(status) {
   const [label, cls] = STATUS[status] || [status || "未知", ""];
@@ -672,7 +690,9 @@ async function loadTargets() {
     const targets = data.targets || [];
     const select = $("targetSelect");
     const current = select.value;
+    const remembered = readLastTarget();
     if (!targets.length) {
+      rememberLastTarget("");
       select.innerHTML = '<option value="">尚未配置下载目标</option>';
       $("composerHint").textContent = "还没有下载目标。可以从左侧“下载目标”添加，主页仍可正常使用。";
       return;
@@ -680,8 +700,15 @@ async function loadTargets() {
     select.innerHTML = targets.map(t =>
       `<option value="${esc(t.id)}">${esc(t.name)} · ${esc(t.dir)}</option>`
     ).join("");
-    const preferred = targets.find(t => t.id === current) || targets.find(t => t.default) || targets[0];
-    if (preferred) select.value = preferred.id;
+    const preferred =
+      targets.find(t => t.id === current) ||
+      targets.find(t => t.id === remembered) ||
+      targets.find(t => t.default) ||
+      targets[0];
+    if (preferred) {
+      select.value = preferred.id;
+      rememberLastTarget(preferred.id);
+    }
     $("composerHint").textContent = "PikPak 账号由系统自动选择，任务会固定到你选择的下载目标。";
   } catch (err) {
     $("targetSelect").innerHTML = '<option value="">下载目标获取失败</option>';
@@ -910,6 +937,10 @@ $("taskForm").addEventListener("submit", async (event) => {
   } finally {
     button.disabled = false;
   }
+});
+
+$("targetSelect").addEventListener("change", event => {
+  rememberLastTarget(event.target.value);
 });
 
 $("refreshBtn").addEventListener("click", async () => {
