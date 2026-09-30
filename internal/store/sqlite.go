@@ -281,6 +281,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 			updated_at = ?,
 			completed_at = ?
 		WHERE id = ?
+		  AND (status <> ? OR ? = ?)
 	`,
 		task.Name,
 		string(task.Status),
@@ -297,6 +298,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 		task.UpdatedAt.Format(time.RFC3339Nano),
 		completedAt,
 		task.ID,
+		string(domain.TaskCancelled),
+		string(task.Status),
+		string(domain.TaskCancelled),
 	)
 	if err != nil {
 		return err
