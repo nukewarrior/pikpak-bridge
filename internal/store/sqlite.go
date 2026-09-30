@@ -191,6 +191,32 @@ func (s *SQLite) ListTasks(ctx context.Context, limit int) ([]domain.Task, error
 	return scanTasks(rows)
 }
 
+func (s *SQLite) PikPakActiveCounts(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pikpak_account_id, COUNT(*)
+		FROM tasks
+		WHERE pikpak_account_id <> ''
+		  AND status IN (?, ?)
+		GROUP BY pikpak_account_id`,
+		string(domain.TaskPikPakSubmitting),
+		string(domain.TaskPikPakRunning),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var id string
+		var count int
+		if err := rows.Scan(&id, &count); err != nil {
+			return nil, err
+		}
+		out[id] = count
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLite) ListPikPakWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
