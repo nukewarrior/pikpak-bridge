@@ -29,11 +29,12 @@ type DatabaseConfig struct {
 }
 
 type PikPakConfig struct {
-	SessionDir   string          `yaml:"session_dir"`
-	QuotaRefresh string          `yaml:"quota_refresh"`
-	StatusInterval string        `yaml:"status_interval"`
-	MinFreeSpace string          `yaml:"min_free_space"`
-	Accounts     []PikPakAccount `yaml:"accounts"`
+	SessionDir     string          `yaml:"session_dir"`
+	QuotaRefresh   string          `yaml:"quota_refresh"`
+	StatusInterval string          `yaml:"status_interval"`
+	StallTimeout   string          `yaml:"stall_timeout"`
+	MinFreeSpace   string          `yaml:"min_free_space"`
+	Accounts       []PikPakAccount `yaml:"accounts"`
 }
 
 type PikPakAccount struct {
@@ -91,10 +92,11 @@ func Default() *Config {
 			Path: "/data/pikpak-bridge.db",
 		},
 		PikPak: PikPakConfig{
-			SessionDir:    "/data/sessions",
-			QuotaRefresh:  "5m",
+			SessionDir:     "/data/sessions",
+			QuotaRefresh:   "5m",
 			StatusInterval: "10s",
-			MinFreeSpace:  "2GB",
+			StallTimeout:   "20m",
+			MinFreeSpace:   "2GB",
 		},
 		Aria2: Aria2Config{
 			StatusInterval: "5s",
