@@ -96,6 +96,7 @@ The core pipeline includes:
 - persistent per-file aria2 progress and deterministic GID recovery
 - final size verification and precise PikPak cleanup
 - embedded Web UI
+- runtime configuration management with hot reload
 - Docker/Compose deployment and multi-architecture GHCR images
 
 ## Development status
@@ -146,6 +147,20 @@ The configuration is saved to:
 /data/config.yaml
 ~~~
 
+### Runtime settings
+
+After setup, use the **Settings** button in the Web UI to add, edit, disable or remove:
+
+- PikPak accounts
+- aria2 instances
+- Download Targets
+
+Saving settings atomically rewrites `/data/config.yaml` and hot-reloads the runtime. The container does not need to restart.
+
+Stored PikPak passwords and aria2 RPC secrets are never returned by the configuration API. Existing credentials remain unchanged when their password/secret fields are left blank while editing.
+
+A PikPak account or aria2 instance that is still referenced by an active task cannot be removed or disabled. Existing tasks keep their snapshotted Target route, while connection details for a stable aria2 instance ID can be updated in place.
+
 ## Test a development image
 
 The Docker workflow supports isolated manual tags for development builds without updating `latest`.
@@ -182,6 +197,15 @@ curl -X POST http://localhost:8080/api/v1/tasks \
 ~~~
 
 If a default target exists, `target` may be omitted.
+
+Runtime configuration:
+
+~~~text
+GET /api/v1/config
+PUT /api/v1/config
+~~~
+
+`GET /api/v1/config` returns editable resource metadata without password/secret values. `PUT /api/v1/config` validates the complete Accounts / Instances / Targets set before applying it atomically.
 
 List targets:
 

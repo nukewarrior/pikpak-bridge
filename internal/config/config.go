@@ -211,6 +211,7 @@ func Validate(cfg *Config) error {
 	}
 
 	instanceIDs := make(map[string]struct{}, len(cfg.Aria2.Instances))
+	instanceEnabled := make(map[string]bool, len(cfg.Aria2.Instances))
 	for i, instance := range cfg.Aria2.Instances {
 		if strings.TrimSpace(instance.ID) == "" || strings.TrimSpace(instance.Name) == "" || strings.TrimSpace(instance.URL) == "" {
 			return fmt.Errorf("aria2.instances[%d] requires id, name and url", i)
@@ -219,6 +220,7 @@ func Validate(cfg *Config) error {
 			return fmt.Errorf("duplicate aria2 instance id %q", instance.ID)
 		}
 		instanceIDs[instance.ID] = struct{}{}
+		instanceEnabled[instance.ID] = Enabled(instance.Enabled)
 	}
 
 	targetIDs := make(map[string]struct{}, len(cfg.Targets))
@@ -239,6 +241,9 @@ func Validate(cfg *Config) error {
 		}
 		targetIDs[target.ID] = struct{}{}
 		if Enabled(target.Enabled) {
+			if !instanceEnabled[target.Aria2InstanceID] {
+				return fmt.Errorf("enabled target %q references disabled aria2 instance %q", target.ID, target.Aria2InstanceID)
+			}
 			enabledTargets++
 			if target.Default {
 				defaults++

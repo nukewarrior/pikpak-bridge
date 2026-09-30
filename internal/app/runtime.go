@@ -14,10 +14,14 @@ import (
 	"github.com/nukewarrior/pikpak-bridge/internal/worker"
 )
 
-var ErrAlreadyConfigured = errors.New("setup has already been completed")
+var (
+	ErrAlreadyConfigured = errors.New("setup has already been completed")
+	ErrNotConfigured     = errors.New("runtime is not configured")
+)
 
 type Runtime struct {
 	mu         sync.RWMutex
+	applyMu    sync.Mutex
 	parent     context.Context
 	db         *store.SQLite
 	configPath string
@@ -26,6 +30,7 @@ type Runtime struct {
 	provider   *pikpak.Manager
 	registry   *aria2.Registry
 	cancel     context.CancelFunc
+	workersWG  *sync.WaitGroup
 }
 
 func NewRuntime(parent context.Context, db *store.SQLite, configPath string, cfg *config.Config, configured bool) (*Runtime, error) {
@@ -33,13 +38,17 @@ func NewRuntime(parent context.Context, db *store.SQLite, configPath string, cfg
 		parent:     parent,
 		db:         db,
 		configPath: configPath,
-		cfg:        cfg,
+		cfg:        cloneConfig(cfg),
 		configured: configured,
 	}
 	if configured {
-		if err := r.start(cfg); err != nil {
+		provider, registry, workers, err := r.prepare(cfg)
+		if err != nil {
 			return nil, err
 		}
+		r.mu.Lock()
+		r.activateLocked(cfg, provider, registry, workers)
+		r.mu.Unlock()
 	}
 	return r, nil
 }
@@ -50,38 +59,84 @@ func (r *Runtime) Configured() bool {
 	return r.configured
 }
 
+func (r *Runtime) CurrentConfig() *config.Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.cfg == nil {
+		return nil
+	}
+	return cloneConfig(r.cfg)
+}
+
 func (r *Runtime) ApplySetup(ctx context.Context, cfg *config.Config) error {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+
+	r.mu.RLock()
+	configured := r.configured
+	r.mu.RUnlock()
+	if configured {
+		return ErrAlreadyConfigured
+	}
+	return r.apply(ctx, cfg, false)
+}
+
+func (r *Runtime) ApplyConfig(ctx context.Context, cfg *config.Config) error {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+
+	r.mu.RLock()
+	configured := r.configured
+	r.mu.RUnlock()
+	if !configured {
+		return ErrNotConfigured
+	}
+	return r.apply(ctx, cfg, true)
+}
+
+func (r *Runtime) apply(ctx context.Context, cfg *config.Config, reload bool) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := config.Validate(cfg); err != nil {
 		return err
 	}
 
-	r.mu.Lock()
-	if r.configured {
-		r.mu.Unlock()
-		return ErrAlreadyConfigured
-	}
-	r.mu.Unlock()
-
-	provider := pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir)
-	registry := aria2.NewRegistry(cfg.Aria2.Instances)
-	if _, err := buildWorkers(cfg, r.db, provider, registry); err != nil {
+	next := cloneConfig(cfg)
+	provider, registry, workers, err := r.prepare(next)
+	if err != nil {
 		return err
 	}
-	if err := config.Save(r.configPath, cfg); err != nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := config.Save(r.configPath, next); err != nil {
 		return fmt.Errorf("save config: %w", err)
+	}
+
+	if reload {
+		r.stopWorkers()
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.configured {
-		return ErrAlreadyConfigured
-	}
-	if err := r.startLocked(cfg); err != nil {
-		return err
-	}
+	r.activateLocked(next, provider, registry, workers)
 	r.configured = true
-	r.cfg = cfg
 	return nil
+}
+
+func (r *Runtime) stopWorkers() {
+	r.mu.RLock()
+	cancel := r.cancel
+	wg := r.workersWG
+	r.mu.RUnlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if wg != nil {
+		wg.Wait()
+	}
 }
 
 func (r *Runtime) AccountIDs() []string {
@@ -136,7 +191,7 @@ func (r *Runtime) ResolveTarget(id string) (config.DownloadTarget, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if !r.configured || r.cfg == nil {
-		return config.DownloadTarget{}, errors.New("runtime is not configured")
+		return config.DownloadTarget{}, ErrNotConfigured
 	}
 
 	var enabled []config.DownloadTarget
@@ -163,33 +218,39 @@ func (r *Runtime) ResolveTarget(id string) (config.DownloadTarget, error) {
 	return config.DownloadTarget{}, errors.New("download target is required")
 }
 
-func (r *Runtime) start(cfg *config.Config) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.startLocked(cfg)
-}
-
-func (r *Runtime) startLocked(cfg *config.Config) error {
+func (r *Runtime) prepare(cfg *config.Config) (*pikpak.Manager, *aria2.Registry, workerSet, error) {
 	provider := pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir)
 	registry := aria2.NewRegistry(cfg.Aria2.Instances)
 	workers, err := buildWorkers(cfg, r.db, provider, registry)
 	if err != nil {
-		return err
+		return nil, nil, workerSet{}, err
 	}
+	return provider, registry, workers, nil
+}
 
-	if r.cancel != nil {
-		r.cancel()
-	}
+func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, registry *aria2.Registry, workers workerSet) {
 	workerCtx, cancel := context.WithCancel(r.parent)
+	wg := &sync.WaitGroup{}
+	wg.Add(3)
+
 	r.cancel = cancel
+	r.workersWG = wg
 	r.provider = provider
 	r.registry = registry
-	r.cfg = cfg
+	r.cfg = cloneConfig(cfg)
 
-	go workers.pikpak.Run(workerCtx)
-	go workers.aria2.Run(workerCtx)
-	go workers.finalizer.Run(workerCtx)
-	return nil
+	go func() {
+		defer wg.Done()
+		workers.pikpak.Run(workerCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		workers.aria2.Run(workerCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		workers.finalizer.Run(workerCtx)
+	}()
 }
 
 type workerSet struct {
@@ -264,4 +325,32 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			CleanupDelay:   cleanupDelay,
 		}),
 	}, nil
+}
+
+func cloneConfig(src *config.Config) *config.Config {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	dst.PikPak.Accounts = append([]config.PikPakAccount(nil), src.PikPak.Accounts...)
+	dst.Aria2.Instances = append([]config.Aria2Instance(nil), src.Aria2.Instances...)
+	dst.Targets = append([]config.DownloadTarget(nil), src.Targets...)
+	for i := range dst.PikPak.Accounts {
+		dst.PikPak.Accounts[i].Enabled = cloneBool(src.PikPak.Accounts[i].Enabled)
+	}
+	for i := range dst.Aria2.Instances {
+		dst.Aria2.Instances[i].Enabled = cloneBool(src.Aria2.Instances[i].Enabled)
+	}
+	for i := range dst.Targets {
+		dst.Targets[i].Enabled = cloneBool(src.Targets[i].Enabled)
+	}
+	return &dst
+}
+
+func cloneBool(src *bool) *bool {
+	if src == nil {
+		return nil
+	}
+	value := *src
+	return &value
 }
