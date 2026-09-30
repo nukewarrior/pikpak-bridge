@@ -25,8 +25,8 @@ func (p *cleanupProvider) SubmitOffline(context.Context, string, string) (pikpak
 func (p *cleanupProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return pikpak.OfflineTask{}, nil
 }
-func (p *cleanupProvider) ListFiles(context.Context, string, string) ([]pikpak.RemoteFile, error) {
-	return nil, nil
+func (p *cleanupProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
+	return pikpak.ResolvedFiles{}, nil
 }
 func (p *cleanupProvider) GetDownloadURL(context.Context, string, string) (string, error) {
 	return "", nil
