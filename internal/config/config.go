@@ -61,12 +61,12 @@ type Aria2Instance struct {
 }
 
 type DownloadTarget struct {
-	ID              string `yaml:"id"`
-	Name            string `yaml:"name"`
-	Aria2InstanceID string `yaml:"aria2_instance"`
-	Dir             string `yaml:"dir"`
-	Default         bool   `yaml:"default,omitempty"`
-	Enabled         *bool  `yaml:"enabled,omitempty"`
+	ID              string `yaml:"id" json:"id"`
+	Name            string `yaml:"name" json:"name"`
+	Aria2InstanceID string `yaml:"aria2_instance" json:"aria2_instance"`
+	Dir             string `yaml:"dir" json:"dir"`
+	Default         bool   `yaml:"default,omitempty" json:"default,omitempty"`
+	Enabled         *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }
 
 type SchedulerConfig struct {
