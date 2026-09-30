@@ -13,7 +13,9 @@ import (
 )
 
 type fakeAria2 struct {
-	added map[string]bool
+	added          map[string]bool
+	addCalls       int
+	tellStatusErr  error
 }
 
 func (f *fakeAria2) Snapshots(context.Context) []aria2.InstanceSnapshot {
@@ -27,6 +29,7 @@ func (f *fakeAria2) Snapshot(context.Context, string) (aria2.InstanceSnapshot, e
 	}, nil
 }
 func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+	f.addCalls++
 	if uri == "" || instanceID != "a1" || baseDir != "/downloads/movies" || relativePath == "" {
 		return "", errors.New("bad add args")
 	}
@@ -37,6 +40,9 @@ func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relati
 	return gid, nil
 }
 func (f *fakeAria2) TellStatus(_ context.Context, instanceID, gid string) (aria2.Status, error) {
+	if f.tellStatusErr != nil {
+		return aria2.Status{}, f.tellStatusErr
+	}
 	if instanceID != "a1" {
 		return aria2.Status{}, errors.New("wrong instance")
 	}
@@ -150,5 +156,84 @@ func TestDeterministicGID(t *testing.T) {
 	b := deterministicGID("task", "file")
 	if a != b || len(a) != 16 {
 		t.Fatalf("unexpected gid %q / %q", a, b)
+	}
+}
+
+
+func TestAria2PollErrorDoesNotResubmit(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/poll-error.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "task-poll",
+		Source:          "https://example.invalid/file",
+		SourceType:      "https",
+		SourceKey:       "url:poll-error",
+		TargetID:        "movies",
+		TargetName:      "电影",
+		Aria2InstanceID: "a1",
+		DownloadDir:     "/downloads/movies",
+		Status:          domain.TaskWaitingAria2,
+		PikPakAccountID: "pp1",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err = db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status = domain.TaskWaitingAria2
+	task.PikPakAccountID = "pp1"
+	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceRemoteFiles(context.Background(), task.ID, []domain.RemoteFile{{
+		TaskID: task.ID, PikPakFileID: "file-1", Name: "movie.mkv",
+		RelativePath: "folder/movie.mkv", Size: 1234,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &fakeAria2{}
+	w := NewAria2(db, fakeURLProvider{}, backend, Aria2Options{
+		StatusInterval: time.Millisecond,
+		RetryInterval:  time.Millisecond,
+		MaxRetry:       3,
+	})
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.addCalls != 1 {
+		t.Fatalf("want one initial aria2 add, got %d", backend.addCalls)
+	}
+
+	backend.tellStatusErr = errors.New("EOF")
+	time.Sleep(2 * time.Millisecond)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	downloads, err := db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downloads) != 1 {
+		t.Fatalf("unexpected downloads: %#v", downloads)
+	}
+	if downloads[0].Status != domain.DownloadSubmitted {
+		t.Fatalf("transient poll error changed status to %s", downloads[0].Status)
+	}
+	if downloads[0].LastError != "EOF" {
+		t.Fatalf("want EOF recorded, got %q", downloads[0].LastError)
+	}
+	if backend.addCalls != 1 {
+		t.Fatalf("transient poll error caused resubmit: add calls = %d", backend.addCalls)
 	}
 }
