@@ -81,6 +81,15 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 }
 
 func (w *Worker) Run(ctx context.Context) {
+	slog.Info("pikpak worker started",
+		"accounts", len(w.options.AccountIDs),
+		"worker_interval", w.options.WorkerInterval,
+		"quota_refresh", w.options.QuotaRefresh,
+		"status_interval", w.options.StatusInterval,
+		"retry_interval", w.options.RetryInterval,
+		"min_free_space", w.options.MinFreeSpace,
+	)
+	defer slog.Info("pikpak worker stopped")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -136,6 +145,14 @@ func (w *Worker) processTask(ctx context.Context, task *domain.Task) error {
 
 func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	now := time.Now().UTC()
+	if len(w.options.AccountIDs) == 0 {
+		slog.Warn("pikpak task waiting: no accounts configured", "task_id", task.ID)
+		task.Status = domain.TaskWaitingPikPakAccount
+		task.Error = "no PikPak account configured"
+		task.NextAttemptAt = timePtr(now.Add(w.options.RetryInterval))
+		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
+	}
+
 	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
 	for _, id := range w.options.AccountIDs {
 		runtime := w.runtime(id)
@@ -146,6 +163,20 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 				snapshot.CooldownUntil = runtime.cooldown
 				snapshot.ActiveJobs += runtime.reserved
 				snapshots = append(snapshots, snapshot)
+				slog.Warn("pikpak account skipped during cooldown",
+					"task_id", task.ID,
+					"account_id", id,
+					"account_name", snapshot.Name,
+					"cooldown_until", runtime.cooldown,
+					"failures", runtime.failures,
+				)
+			} else {
+				slog.Warn("pikpak account skipped during cooldown",
+					"task_id", task.ID,
+					"account_id", id,
+					"cooldown_until", runtime.cooldown,
+					"failures", runtime.failures,
+				)
 			}
 			continue
 		}
@@ -161,20 +192,78 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		snapshot, err := w.provider.RefreshAccount(ctx, id)
 		if err != nil {
 			w.noteAccountFailure(id, snapshot, err, now)
+			failed := w.runtime(id)
+			slog.Warn("pikpak account refresh failed",
+				"task_id", task.ID,
+				"account_id", id,
+				"account_name", snapshot.Name,
+				"error", err,
+				"error_kind", pikpak.KindOf(err),
+				"failures", failed.failures,
+				"cooldown_until", failed.cooldown,
+			)
 			continue
 		}
 		w.noteAccountSuccess(id, snapshot, now)
 		snapshot.ActiveJobs += runtime.reserved
 		snapshots = append(snapshots, snapshot)
+		slog.Info("pikpak account refreshed",
+			"account_id", snapshot.ID,
+			"account_name", snapshot.Name,
+			"enabled", snapshot.Enabled,
+			"healthy", snapshot.Healthy,
+			"state", snapshot.State,
+			"quota_remaining", snapshot.QuotaRemaining,
+			"quota_total", snapshot.QuotaTotal,
+			"storage_free", snapshot.StorageFree,
+			"active_jobs", snapshot.ActiveJobs,
+			"max_jobs", snapshot.MaxJobs,
+		)
 	}
 
 	selected, err := scheduler.SelectPikPakAccount(snapshots, w.options.MinFreeSpace, now)
 	if err != nil {
+		slog.Warn("pikpak task waiting: no eligible account",
+			"task_id", task.ID,
+			"configured_accounts", len(w.options.AccountIDs),
+			"snapshots", len(snapshots),
+			"required_free_space", w.options.MinFreeSpace,
+			"retry_in", w.options.RetryInterval,
+		)
+		for _, snapshot := range snapshots {
+			reasons := accountEligibilityReasons(snapshot, w.options.MinFreeSpace, now)
+			slog.Warn("pikpak account ineligible",
+				"task_id", task.ID,
+				"account_id", snapshot.ID,
+				"account_name", snapshot.Name,
+				"reasons", strings.Join(reasons, ","),
+				"enabled", snapshot.Enabled,
+				"healthy", snapshot.Healthy,
+				"state", snapshot.State,
+				"quota_remaining", snapshot.QuotaRemaining,
+				"quota_total", snapshot.QuotaTotal,
+				"storage_free", snapshot.StorageFree,
+				"active_jobs", snapshot.ActiveJobs,
+				"max_jobs", snapshot.MaxJobs,
+				"cooldown_until", snapshot.CooldownUntil,
+				"last_used_at", snapshot.LastUsedAt,
+			)
+		}
 		task.Status = domain.TaskWaitingPikPakAccount
 		task.Error = "no eligible PikPak account"
 		task.NextAttemptAt = timePtr(now.Add(w.options.RetryInterval))
 		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
 	}
+
+	slog.Info("pikpak account selected",
+		"task_id", task.ID,
+		"account_id", selected.ID,
+		"account_name", selected.Name,
+		"quota_remaining", selected.QuotaRemaining,
+		"storage_free", selected.StorageFree,
+		"active_jobs", selected.ActiveJobs,
+		"max_jobs", selected.MaxJobs,
+	)
 
 	runtime := w.runtime(selected.ID)
 	runtime.reserved++
@@ -204,9 +293,20 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 		defer w.releaseReservation(task.PikPakAccountID)
 	}
 
+	slog.Info("pikpak offline submit started",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"source_type", task.SourceType,
+	)
 	remote, err := w.provider.SubmitOffline(ctx, task.PikPakAccountID, task.Source)
 	if err != nil {
 		w.noteSubmitError(task.PikPakAccountID, err)
+		slog.Warn("pikpak offline submit failed",
+			"task_id", task.ID,
+			"account_id", task.PikPakAccountID,
+			"error", err,
+			"error_kind", pikpak.KindOf(err),
+		)
 		switch pikpak.KindOf(err) {
 		case pikpak.ErrorKindQuota, pikpak.ErrorKindStorage, pikpak.ErrorKindAuth, pikpak.ErrorKindCaptcha:
 			task.PikPakAccountID = ""
@@ -227,6 +327,13 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 	}
 
 	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
+	slog.Info("pikpak offline submit accepted",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"pikpak_task_id", remote.ID,
+		"phase", remote.Status,
+		"root_file_id", remote.RootFileID,
+	)
 	task.PikPakTaskID = remote.ID
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
@@ -274,6 +381,12 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 
 	switch remote.Status {
 	case pikpak.PhaseComplete:
+		slog.Info("pikpak offline task complete",
+			"task_id", task.ID,
+			"account_id", task.PikPakAccountID,
+			"pikpak_task_id", task.PikPakTaskID,
+			"root_file_id", task.PikPakRootFileID,
+		)
 		w.invalidateAccount(task.PikPakAccountID)
 		if task.PikPakRootFileID == "" {
 			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
@@ -283,6 +396,12 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			task.NextAttemptAt = nil
 		}
 	case pikpak.PhaseError:
+		slog.Warn("pikpak offline task failed",
+			"task_id", task.ID,
+			"account_id", task.PikPakAccountID,
+			"pikpak_task_id", task.PikPakTaskID,
+			"error", remote.Error,
+		)
 		w.invalidateAccount(task.PikPakAccountID)
 		task.Status = domain.TaskPikPakFailed
 		task.NextAttemptAt = nil
@@ -339,6 +458,13 @@ func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
 
+	slog.Info("pikpak files resolved",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"root_file_id", task.PikPakRootFileID,
+		"files", len(persisted),
+		"downloadable", downloadable,
+	)
 	task.Status = domain.TaskWaitingAria2
 	task.NextAttemptAt = nil
 	task.RetryCount = 0
@@ -440,6 +566,35 @@ func (w *Worker) noteSubmitSuccess(id string, active bool) {
 
 func (w *Worker) invalidateAccount(id string) {
 	w.runtime(id).refreshed = time.Time{}
+}
+
+
+func accountEligibilityReasons(account pikpak.AccountSnapshot, requiredBytes int64, now time.Time) []string {
+	reasons := make([]string, 0, 6)
+	if !account.Enabled {
+		reasons = append(reasons, "disabled")
+	}
+	if !account.Healthy {
+		reasons = append(reasons, "unhealthy")
+	}
+	if account.QuotaRemaining <= 0 {
+		reasons = append(reasons, "quota_exhausted")
+	}
+	if !account.CooldownUntil.IsZero() && now.Before(account.CooldownUntil) {
+		reasons = append(reasons, "cooldown")
+	}
+	if account.MaxJobs <= 0 {
+		reasons = append(reasons, "max_jobs_invalid")
+	} else if account.ActiveJobs >= account.MaxJobs {
+		reasons = append(reasons, "at_capacity")
+	}
+	if requiredBytes > 0 && account.StorageFree < requiredBytes {
+		reasons = append(reasons, "insufficient_storage")
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "unknown")
+	}
+	return reasons
 }
 
 func ParseByteSize(input string) (int64, error) {
