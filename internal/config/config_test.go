@@ -27,7 +27,7 @@ func TestSaveRoundTripAndPermissions(t *testing.T) {
 		ID: "pp01", Name: "主账号", Username: "user", Password: "secret", MaxJobs: 2,
 	}}
 	cfg.Aria2.Instances = []Aria2Instance{{
-		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc", MaxActive: 4,
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc",
 	}}
 	cfg.Targets = []DownloadTarget{{
 		ID: "movies", Name: "电影", Aria2InstanceID: "nas", Dir: "/downloads/movies", Default: true,
@@ -61,7 +61,7 @@ func TestValidateRejectsUnknownTargetInstance(t *testing.T) {
 		ID: "pp01", Name: "主账号", Username: "user", Password: "secret", MaxJobs: 2,
 	}}
 	cfg.Aria2.Instances = []Aria2Instance{{
-		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc", MaxActive: 4,
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc",
 	}}
 	cfg.Targets = []DownloadTarget{{
 		ID: "movies", Name: "电影", Aria2InstanceID: "missing", Dir: "/movies",
