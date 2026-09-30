@@ -135,16 +135,6 @@ func (m *Manager) SubmitOffline(ctx context.Context, accountID, source string) (
 		return OfflineTask{}, err
 	}
 
-	tasks, err := entry.client.OfflineTasks(ctx)
-	if err != nil {
-		return OfflineTask{}, fmt.Errorf("check existing offline tasks before submit: %w", err)
-	}
-	if existing, ok := findOfflineTaskBySource(tasks, source); ok {
-		result := mapOfflineTask(existing)
-		result.Existing = true
-		return result, nil
-	}
-
 	task, err := entry.client.CreateOfflineTask(ctx, source)
 	if err != nil {
 		return OfflineTask{}, err
@@ -153,16 +143,6 @@ func (m *Manager) SubmitOffline(ctx context.Context, accountID, source string) (
 	m.lastUsed[accountID] = time.Now().UTC()
 	m.mu.Unlock()
 	return mapOfflineTask(task), nil
-}
-
-func findOfflineTaskBySource(tasks []offlineTaskAPI, source string) (offlineTaskAPI, bool) {
-	source = strings.TrimSpace(source)
-	for _, task := range tasks {
-		if strings.TrimSpace(task.Params.URL) == source {
-			return task, true
-		}
-	}
-	return offlineTaskAPI{}, false
 }
 
 func (m *Manager) GetOfflineTask(ctx context.Context, accountID, taskID string) (OfflineTask, error) {
