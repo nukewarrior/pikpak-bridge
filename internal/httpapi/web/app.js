@@ -41,6 +41,7 @@ let toastTimer;
 let accountSeq = 0;
 let aria2Seq = 0;
 let targetSeq = 0;
+let currentConfigView = "accounts";
 
 function esc(value) {
   return String(value ?? "")
@@ -108,7 +109,41 @@ function showHome() {
   setActiveNav("homeNav");
 }
 
-function showSettings(data, sectionId="") {
+const CONFIG_VIEWS = {
+  accounts: {
+    nav: "accountNav",
+    section: "accountSection",
+    eyebrow: "PIKPAK",
+    title: "PikPak 账号",
+    description: "管理用于离线下载的 PikPak 账号，系统会自动选择可用账号。"
+  },
+  aria2: {
+    nav: "aria2Nav",
+    section: "aria2Section",
+    eyebrow: "ARIA2",
+    title: "aria2 实例",
+    description: "管理用于接收最终文件的 aria2 JSON-RPC 服务。"
+  },
+  targets: {
+    nav: "targetNav",
+    section: "targetSection",
+    eyebrow: "TARGETS",
+    title: "下载目标",
+    description: "管理可选下载位置，每个目标绑定一个 aria2 实例和目录。"
+  },
+  settings: {
+    nav: "settingsNav",
+    section: "generalSection",
+    eyebrow: "SETTINGS",
+    title: "设置",
+    description: "查看 PikPak Bridge 的全局运行设置。"
+  }
+};
+
+function showConfigView(data, view="accounts") {
+  currentConfigView = CONFIG_VIEWS[view] ? view : "accounts";
+  const meta = CONFIG_VIEWS[currentConfigView];
+
   resetConfigForm();
   $("homeView").classList.add("hidden");
   $("setupScreen").classList.remove("hidden");
@@ -118,30 +153,22 @@ function showSettings(data, sectionId="") {
   (data?.targets || []).forEach(item => $("setupTargets").appendChild(targetEntry(item)));
   refreshTargetAria2Options();
 
-  const navId = sectionId === "accountSection" ? "accountNav"
-    : sectionId === "aria2Section" ? "aria2Nav"
-    : sectionId === "targetSection" ? "targetNav"
-    : "settingsNav";
-  setActiveNav(navId);
+  document.querySelectorAll(".resource-page").forEach(section => section.classList.add("hidden"));
+  $(meta.section).classList.remove("hidden");
+  $("setupActions").classList.toggle("hidden", currentConfigView === "settings");
 
-  if (sectionId) {
-    requestAnimationFrame(() => {
-      const section = $(sectionId);
-      if (!section) return;
-      section.scrollIntoView({behavior:"smooth", block:"start"});
-      section.classList.add("highlight");
-      setTimeout(() => section.classList.remove("highlight"), 1200);
-    });
-  } else {
-    window.scrollTo({top:0, behavior:"smooth"});
-  }
+  $("setupEyebrow").textContent = meta.eyebrow;
+  $("setupTitle").textContent = meta.title;
+  $("setupDescription").textContent = meta.description;
+  setActiveNav(meta.nav);
+  window.scrollTo({top:0, behavior:"smooth"});
 }
 
-async function openSettings(sectionId="") {
+async function openConfigView(view="accounts") {
   try {
     let data = {pikpak_accounts:[], aria2_instances:[], targets:[]};
     if (appConfigured) data = await request("/api/v1/config");
-    showSettings(data, sectionId);
+    showConfigView(data, view);
   } catch (err) {
     toast("配置加载失败：" + err.message, true);
   }
@@ -578,8 +605,8 @@ async function bootstrap() {
 }
 
 $("homeNav").addEventListener("click", showHome);
-document.querySelectorAll("[data-config-section]").forEach(button => {
-  button.addEventListener("click", () => openSettings(button.dataset.configSection || ""));
+document.querySelectorAll("[data-config-view]").forEach(button => {
+  button.addEventListener("click", () => openConfigView(button.dataset.configView || "settings"));
 });
 
 $("settingsCancelBtn").addEventListener("click", showHome);
@@ -609,8 +636,8 @@ $("setupForm").addEventListener("submit", async (event) => {
     });
     appConfigured = true;
     toast("配置已保存并生效。");
-    showHome();
     await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
+    await openConfigView(currentConfigView);
   } catch (err) {
     toast("保存失败：" + err.message, true);
   } finally {
@@ -629,7 +656,7 @@ $("taskForm").addEventListener("submit", async (event) => {
   }
   if (!target) {
     toast("请先添加一个下载目标。", true);
-    openSettings("targetSection");
+    openConfigView("targets");
     return;
   }
 
@@ -649,7 +676,7 @@ $("taskForm").addEventListener("submit", async (event) => {
       toast("该资源已有任务：" + err.body.existing_task_id, true);
     } else if (err.status === 503) {
       toast("请先完成所需资源配置。", true);
-      openSettings("accountSection");
+      openConfigView("accounts");
     } else {
       toast("创建失败：" + err.message, true);
     }
