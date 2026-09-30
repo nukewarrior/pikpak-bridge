@@ -222,7 +222,7 @@ function targetEntry(values={}) {
       </div>
       <div class="field">
         <label>默认目标</label>
-        <label class="checkbox-row"><input data-field="default" type="checkbox" ${values.default || index === 1 ? "checked" : ""}> 未指定 Target 时使用</label>
+        <label class="checkbox-row"><input data-field="default" type="checkbox" ${values.default === true || (values.default === undefined && index === 1) ? "checked" : ""}> 未指定 Target 时使用</label>
       </div>
       <div class="field">
         <label>状态</label>
