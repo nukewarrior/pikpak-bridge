@@ -16,19 +16,33 @@ import (
 type fakeRuntime struct {
 	configured bool
 	applied    *config.Config
+	targets    []config.DownloadTarget
 }
 
 func (f *fakeRuntime) Configured() bool { return f.configured }
 func (f *fakeRuntime) ApplySetup(_ context.Context, cfg *config.Config) error {
 	f.applied = cfg
+	f.targets = cfg.Targets
 	f.configured = true
 	return nil
 }
-func (f *fakeRuntime) AccountNames() []string { return nil }
+func (f *fakeRuntime) AccountIDs() []string { return nil }
 func (f *fakeRuntime) RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error) {
 	return pikpak.AccountSnapshot{}, nil
 }
 func (f *fakeRuntime) Aria2Snapshots(context.Context) []aria2.InstanceSnapshot { return nil }
+func (f *fakeRuntime) DownloadTargets() []config.DownloadTarget { return f.targets }
+func (f *fakeRuntime) ResolveTarget(id string) (config.DownloadTarget, error) {
+	for _, target := range f.targets {
+		if target.ID == id || (id == "" && target.Default) {
+			return target, nil
+		}
+	}
+	if id == "" && len(f.targets) == 1 {
+		return f.targets[0], nil
+	}
+	return config.DownloadTarget{}, context.Canceled
+}
 
 func TestWebUIRoutes(t *testing.T) {
 	db, err := store.Open(t.TempDir() + "/test.db")
@@ -81,8 +95,9 @@ func TestFirstRunSetup(t *testing.T) {
 	}
 
 	body := `{
-		"pikpak_accounts":[{"name":"pp01","username":"user","password":"pass"}],
-		"aria2_instances":[{"name":"nas","url":"http://aria2:6800/jsonrpc","secret":"rpc","dir":"/downloads","max_active":4,"weight":10}]
+		"pikpak_accounts":[{"id":"pp01","name":"主账号","username":"user","password":"pass","max_jobs":2}],
+		"aria2_instances":[{"id":"nas","name":"NAS","url":"http://aria2:6800/jsonrpc","secret":"rpc","max_active":4}],
+		"targets":[{"id":"movies","name":"电影","aria2_instance":"nas","dir":"/downloads/movies","default":true}]
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -91,8 +106,14 @@ func TestFirstRunSetup(t *testing.T) {
 	if res.Code != http.StatusCreated {
 		t.Fatalf("want 201, got %d: %s", res.Code, res.Body.String())
 	}
-	if runtime.applied == nil || len(runtime.applied.PikPak.Accounts) != 1 || len(runtime.applied.Aria2.Instances) != 1 {
+	if runtime.applied == nil ||
+		len(runtime.applied.PikPak.Accounts) != 1 ||
+		len(runtime.applied.Aria2.Instances) != 1 ||
+		len(runtime.applied.Targets) != 1 {
 		t.Fatalf("setup was not applied: %#v", runtime.applied)
+	}
+	if runtime.applied.Targets[0].Aria2InstanceID != "nas" {
+		t.Fatalf("unexpected target: %#v", runtime.applied.Targets[0])
 	}
 
 	second := httptest.NewRecorder()
@@ -117,5 +138,51 @@ func TestTaskCreationBlockedBeforeSetup(t *testing.T) {
 	server.Handler().ServeHTTP(res, req)
 	if res.Code != http.StatusServiceUnavailable {
 		t.Fatalf("want 503, got %d", res.Code)
+	}
+}
+
+func TestTaskCreationSnapshotsTargetAndDedupesPerTarget(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	runtime := &fakeRuntime{
+		configured: true,
+		targets: []config.DownloadTarget{
+			{ID: "movies", Name: "电影", Aria2InstanceID: "nas", Dir: "/media/movies", Default: true},
+			{ID: "temp", Name: "临时", Aria2InstanceID: "nas", Dir: "/downloads/temp"},
+		},
+	}
+	server := New(db, WithRuntime(runtime))
+	source := "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567"
+
+	create := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks",
+			strings.NewReader(`{"url":"`+source+`","target":"`+target+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		res := httptest.NewRecorder()
+		server.Handler().ServeHTTP(res, req)
+		return res
+	}
+
+	first := create("movies")
+	if first.Code != http.StatusCreated {
+		t.Fatalf("movies: want 201, got %d: %s", first.Code, first.Body.String())
+	}
+	if !strings.Contains(first.Body.String(), `"target_id":"movies"`) ||
+		!strings.Contains(first.Body.String(), `"download_dir":"/media/movies"`) {
+		t.Fatalf("task did not snapshot target: %s", first.Body.String())
+	}
+
+	duplicate := create("movies")
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("same target: want 409, got %d", duplicate.Code)
+	}
+
+	otherTarget := create("temp")
+	if otherTarget.Code != http.StatusCreated {
+		t.Fatalf("different target: want 201, got %d: %s", otherTarget.Code, otherTarget.Body.String())
 	}
 }
