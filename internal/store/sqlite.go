@@ -67,6 +67,7 @@ func (s *SQLite) init(ctx context.Context) error {
 			pikpak_task_id TEXT NOT NULL DEFAULT '',
 			pikpak_root_file_id TEXT NOT NULL DEFAULT '',
 			retry_count INTEGER NOT NULL DEFAULT 0,
+			manual_retry_count INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at TEXT,
 			error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -107,6 +108,7 @@ func (s *SQLite) init(ctx context.Context) error {
 			total_length INTEGER NOT NULL DEFAULT 0,
 			completed_length INTEGER NOT NULL DEFAULT 0,
 			retry_count INTEGER NOT NULL DEFAULT 0,
+			eof_retry_count INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at TEXT,
 			last_error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -122,13 +124,22 @@ func (s *SQLite) init(ctx context.Context) error {
 			return fmt.Errorf("database init: %w", err)
 		}
 	}
+	for _, stmt := range []string{
+		`ALTER TABLE tasks ADD COLUMN manual_retry_count INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE downloads ADD COLUMN eof_retry_count INTEGER NOT NULL DEFAULT 0`,
+	} {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil &&
+			!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+			return fmt.Errorf("database migration: %w", err)
+		}
+	}
 	return nil
 }
 
 const taskColumns = `id, source, source_type, source_key,
 	target_id, target_name, aria2_instance_id, download_dir, status,
 	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
-	retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
+	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
 
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -233,6 +244,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 			pikpak_task_id = ?,
 			pikpak_root_file_id = ?,
 			retry_count = ?,
+			manual_retry_count = ?,
 			next_attempt_at = ?,
 			error = ?,
 			updated_at = ?,
@@ -244,6 +256,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 		task.PikPakTaskID,
 		task.PikPakRootFileID,
 		task.RetryCount,
+		task.ManualRetryCount,
 		nextAttempt,
 		task.Error,
 		task.UpdatedAt.Format(time.RFC3339Nano),
@@ -440,7 +453,7 @@ func (s *SQLite) ListDownloads(ctx context.Context, taskID string) ([]domain.Dow
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT task_id, pikpak_file_id, aria2_instance_id, aria2_gid, status,
 		       relative_path, expected_size, total_length, completed_length,
-		       retry_count, next_attempt_at, last_error, created_at, updated_at
+		       retry_count, eof_retry_count, next_attempt_at, last_error, created_at, updated_at
 		FROM downloads
 		WHERE task_id = ?
 		ORDER BY relative_path ASC
@@ -466,6 +479,7 @@ func (s *SQLite) ListDownloads(ctx context.Context, taskID string) ([]domain.Dow
 			&download.TotalLength,
 			&download.CompletedLength,
 			&download.RetryCount,
+			&download.EOFRetryCount,
 			&nextAttempt,
 			&download.LastError,
 			&createdAt,
@@ -511,6 +525,7 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 			total_length = ?,
 			completed_length = ?,
 			retry_count = ?,
+			eof_retry_count = ?,
 			next_attempt_at = ?,
 			last_error = ?,
 			updated_at = ?
@@ -524,6 +539,7 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 		download.TotalLength,
 		download.CompletedLength,
 		download.RetryCount,
+		download.EOFRetryCount,
 		nextAttempt,
 		download.LastError,
 		download.UpdatedAt.Format(time.RFC3339Nano),
@@ -541,6 +557,88 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+
+func (s *SQLite) AddTaskEvent(ctx context.Context, taskID, eventType, message string) error {
+	if strings.TrimSpace(eventType) == "" {
+		return errors.New("event type is required")
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO events(task_id, type, message, created_at)
+		VALUES (?, ?, ?, ?)
+	`, taskID, eventType, message, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *SQLite) ListTaskEvents(ctx context.Context, taskID string, limit int) ([]domain.TaskEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, task_id, type, message, created_at
+		FROM events
+		WHERE task_id = ?
+		ORDER BY id DESC
+		LIMIT ?
+	`, taskID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.TaskEvent
+	for rows.Next() {
+		var event domain.TaskEvent
+		var createdAt string
+		if err := rows.Scan(&event.ID, &event.TaskID, &event.Type, &event.Message, &createdAt); err != nil {
+			return nil, err
+		}
+		event.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLite) ResetDownloadsForRetry(ctx context.Context, taskID string, includeComplete bool) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	query := `
+		UPDATE downloads SET
+			aria2_gid = '',
+			status = ?,
+			total_length = 0,
+			completed_length = 0,
+			retry_count = 0,
+			eof_retry_count = 0,
+			next_attempt_at = NULL,
+			last_error = '',
+			updated_at = ?
+		WHERE task_id = ?`
+	args := []any{string(domain.DownloadPending), now, taskID}
+	if !includeComplete {
+		query += " AND status <> ?"
+		args = append(args, string(domain.DownloadComplete))
+	}
+	_, err := s.db.ExecContext(ctx, query, args...)
+	return err
+}
+
+func (s *SQLite) ClearTransferState(ctx context.Context, taskID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "DELETE FROM downloads WHERE task_id = ?", taskID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM remote_files WHERE task_id = ?", taskID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func scanTasks(rows *sql.Rows) ([]domain.Task, error) {
@@ -577,6 +675,7 @@ func scan(row scanner) (domain.Task, error) {
 		&task.PikPakTaskID,
 		&task.PikPakRootFileID,
 		&task.RetryCount,
+		&task.ManualRetryCount,
 		&nextAttemptAt,
 		&task.Error,
 		&createdAt,
