@@ -17,3 +17,9 @@ func TestDestinationRejectsTraversal(t *testing.T) {
 		t.Fatal("expected traversal rejection")
 	}
 }
+
+func TestDestinationRequiresTargetDir(t *testing.T) {
+	if _, _, err := destination("", "movie.mkv"); err == nil {
+		t.Fatal("expected empty target directory rejection")
+	}
+}
