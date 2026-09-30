@@ -24,7 +24,7 @@ type Runtime struct {
 	configured bool
 	cfg        *config.Config
 	provider   *pikpak.Manager
-	ariaPool   *aria2.Pool
+	registry   *aria2.Registry
 	cancel     context.CancelFunc
 }
 
@@ -51,7 +51,7 @@ func (r *Runtime) Configured() bool {
 }
 
 func (r *Runtime) ApplySetup(ctx context.Context, cfg *config.Config) error {
-	if err := config.ValidateSetup(cfg); err != nil {
+	if err := config.Validate(cfg); err != nil {
 		return err
 	}
 
@@ -62,8 +62,9 @@ func (r *Runtime) ApplySetup(ctx context.Context, cfg *config.Config) error {
 	}
 	r.mu.Unlock()
 
-	// Parse all runtime settings before persisting the one-time setup.
-	if _, err := buildWorkers(cfg, r.db, pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir, cfg.PikPak.MaxJobsPerAccount), aria2.NewPool(cfg.Aria2.Instances)); err != nil {
+	provider := pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir)
+	registry := aria2.NewRegistry(cfg.Aria2.Instances)
+	if _, err := buildWorkers(cfg, r.db, provider, registry); err != nil {
 		return err
 	}
 	if err := config.Save(r.configPath, cfg); err != nil {
@@ -83,7 +84,7 @@ func (r *Runtime) ApplySetup(ctx context.Context, cfg *config.Config) error {
 	return nil
 }
 
-func (r *Runtime) AccountNames() []string {
+func (r *Runtime) AccountIDs() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if !r.configured || r.cfg == nil {
@@ -91,29 +92,75 @@ func (r *Runtime) AccountNames() []string {
 	}
 	out := make([]string, 0, len(r.cfg.PikPak.Accounts))
 	for _, account := range r.cfg.PikPak.Accounts {
-		out = append(out, account.Name)
+		out = append(out, account.ID)
 	}
 	return out
 }
 
-func (r *Runtime) RefreshAccount(ctx context.Context, name string) (pikpak.AccountSnapshot, error) {
+func (r *Runtime) RefreshAccount(ctx context.Context, id string) (pikpak.AccountSnapshot, error) {
 	r.mu.RLock()
 	provider := r.provider
 	r.mu.RUnlock()
 	if provider == nil {
-		return pikpak.AccountSnapshot{Name: name, State: "NOT_CONFIGURED"}, errors.New("PikPak is not configured")
+		return pikpak.AccountSnapshot{ID: id, State: "NOT_CONFIGURED"}, errors.New("PikPak is not configured")
 	}
-	return provider.RefreshAccount(ctx, name)
+	return provider.RefreshAccount(ctx, id)
 }
 
 func (r *Runtime) Aria2Snapshots(ctx context.Context) []aria2.InstanceSnapshot {
 	r.mu.RLock()
-	pool := r.ariaPool
+	registry := r.registry
 	r.mu.RUnlock()
-	if pool == nil {
+	if registry == nil {
 		return nil
 	}
-	return pool.Snapshots(ctx)
+	return registry.Snapshots(ctx)
+}
+
+func (r *Runtime) DownloadTargets() []config.DownloadTarget {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.configured || r.cfg == nil {
+		return nil
+	}
+	out := make([]config.DownloadTarget, 0, len(r.cfg.Targets))
+	for _, target := range r.cfg.Targets {
+		if config.Enabled(target.Enabled) {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
+func (r *Runtime) ResolveTarget(id string) (config.DownloadTarget, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.configured || r.cfg == nil {
+		return config.DownloadTarget{}, errors.New("runtime is not configured")
+	}
+
+	var enabled []config.DownloadTarget
+	for _, target := range r.cfg.Targets {
+		if !config.Enabled(target.Enabled) {
+			continue
+		}
+		enabled = append(enabled, target)
+		if id != "" && target.ID == id {
+			return target, nil
+		}
+	}
+	if id != "" {
+		return config.DownloadTarget{}, fmt.Errorf("download target %q not found or disabled", id)
+	}
+	for _, target := range enabled {
+		if target.Default {
+			return target, nil
+		}
+	}
+	if len(enabled) == 1 {
+		return enabled[0], nil
+	}
+	return config.DownloadTarget{}, errors.New("download target is required")
 }
 
 func (r *Runtime) start(cfg *config.Config) error {
@@ -123,9 +170,9 @@ func (r *Runtime) start(cfg *config.Config) error {
 }
 
 func (r *Runtime) startLocked(cfg *config.Config) error {
-	provider := pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir, cfg.PikPak.MaxJobsPerAccount)
-	pool := aria2.NewPool(cfg.Aria2.Instances)
-	workers, err := buildWorkers(cfg, r.db, provider, pool)
+	provider := pikpak.NewManager(cfg.PikPak.Accounts, cfg.PikPak.SessionDir)
+	registry := aria2.NewRegistry(cfg.Aria2.Instances)
+	workers, err := buildWorkers(cfg, r.db, provider, registry)
 	if err != nil {
 		return err
 	}
@@ -136,7 +183,7 @@ func (r *Runtime) startLocked(cfg *config.Config) error {
 	workerCtx, cancel := context.WithCancel(r.parent)
 	r.cancel = cancel
 	r.provider = provider
-	r.ariaPool = pool
+	r.registry = registry
 	r.cfg = cfg
 
 	go workers.pikpak.Run(workerCtx)
@@ -151,7 +198,7 @@ type workerSet struct {
 	finalizer *worker.Finalizer
 }
 
-func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider, pool aria2.Backend) (workerSet, error) {
+func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider, backend aria2.Backend) (workerSet, error) {
 	quotaRefresh, err := time.ParseDuration(cfg.PikPak.QuotaRefresh)
 	if err != nil {
 		return workerSet{}, fmt.Errorf("pikpak.quota_refresh: %w", err)
@@ -185,14 +232,14 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 		return workerSet{}, fmt.Errorf("pikpak.min_free_space: %w", err)
 	}
 
-	accountNames := make([]string, 0, len(cfg.PikPak.Accounts))
+	accountIDs := make([]string, 0, len(cfg.PikPak.Accounts))
 	for _, account := range cfg.PikPak.Accounts {
-		accountNames = append(accountNames, account.Name)
+		accountIDs = append(accountIDs, account.ID)
 	}
 
 	return workerSet{
 		pikpak: worker.New(db, provider, worker.Options{
-			AccountNames:            accountNames,
+			AccountIDs:              accountIDs,
 			WorkerInterval:          workerInterval,
 			QuotaRefresh:            quotaRefresh,
 			StatusInterval:          pikpakStatus,
@@ -202,7 +249,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			AccountFailureThreshold: cfg.Scheduler.AccountFailureThreshold,
 			AccountCooldown:         accountCooldown,
 		}),
-		aria2: worker.NewAria2(db, provider, pool, worker.Aria2Options{
+		aria2: worker.NewAria2(db, provider, backend, worker.Aria2Options{
 			WorkerInterval: workerInterval,
 			StatusInterval: aria2Status,
 			RetryInterval:  retryInterval,
