@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -74,6 +75,47 @@ func NormalizeSource(input string) (NormalizedSource, error) {
 	default:
 		return NormalizedSource{}, fmt.Errorf("unsupported source scheme %q", u.Scheme)
 	}
+}
+
+func InitialTaskName(source, sourceType string) string {
+	source = strings.TrimSpace(source)
+	switch strings.ToLower(strings.TrimSpace(sourceType)) {
+	case "magnet":
+		if u, err := url.Parse(source); err == nil {
+			if name := strings.TrimSpace(u.Query().Get("dn")); name != "" {
+				return name
+			}
+		}
+		return "Magnet 下载任务"
+	case "http", "https":
+		if u, err := url.Parse(source); err == nil {
+			if p := strings.TrimSuffix(u.Path, "/"); p != "" {
+				name := path.Base(p)
+				if decoded, err := url.PathUnescape(name); err == nil {
+					name = decoded
+				}
+				if name = strings.TrimSpace(name); name != "" && name != "." && name != "/" {
+					return name
+				}
+			}
+			if host := strings.TrimSpace(u.Hostname()); host != "" {
+				return host
+			}
+		}
+	case "ed2k":
+		parts := strings.Split(source, "|")
+		if len(parts) > 2 {
+			name := strings.TrimSpace(parts[2])
+			if decoded, err := url.PathUnescape(name); err == nil {
+				name = decoded
+			}
+			if name = strings.TrimSpace(name); name != "" {
+				return name
+			}
+		}
+		return "ED2K 下载任务"
+	}
+	return "下载任务"
 }
 
 func NewTaskID() (string, error) {
