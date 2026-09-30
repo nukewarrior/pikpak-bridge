@@ -76,3 +76,46 @@ func validRuntimeConfig() *config.Config {
 	}}
 	return cfg
 }
+
+
+func TestRuntimeCanStartWithEmptyResources(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "empty-runtime.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	runtime, err := NewRuntime(ctx, db, configPath, config.Default(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ApplySetup(ctx, config.Default()); err != nil {
+		t.Fatalf("empty setup should start runtime: %v", err)
+	}
+	defer runtime.stopWorkers()
+
+	if !runtime.Configured() {
+		t.Fatal("runtime should be configured after empty setup")
+	}
+	if got := runtime.AccountIDs(); len(got) != 0 {
+		t.Fatalf("want no PikPak accounts, got %v", got)
+	}
+	if got := runtime.DownloadTargets(); len(got) != 0 {
+		t.Fatalf("want no download targets, got %v", got)
+	}
+	if _, err := runtime.ResolveTarget(""); err == nil {
+		t.Fatal("resolving a target without configured targets should fail")
+	}
+
+	persisted, err := config.Load(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted.PikPak.Accounts) != 0 || len(persisted.Aria2.Instances) != 0 || len(persisted.Targets) != 0 {
+		t.Fatalf("empty resource config was not preserved: %#v", persisted)
+	}
+}

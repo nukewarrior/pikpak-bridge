@@ -49,6 +49,12 @@ func NewFinalizer(store finalizeStore, provider pikpak.Provider, options Finaliz
 }
 
 func (w *Finalizer) Run(ctx context.Context) {
+	slog.Info("收尾工作器已启动",
+		"verify_size", w.options.VerifySize,
+		"cleanup_enabled", w.options.CleanupEnabled,
+		"cleanup_delay", w.options.CleanupDelay,
+	)
+	defer slog.Info("收尾工作器已停止")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -64,7 +70,7 @@ func (w *Finalizer) Run(ctx context.Context) {
 
 func (w *Finalizer) runOnceLogged(ctx context.Context) {
 	if err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("finalizer iteration failed", "error", err)
+		slog.Error("收尾工作循环执行失败", "error", err)
 	}
 }
 
@@ -78,7 +84,7 @@ func (w *Finalizer) RunOnce(ctx context.Context) error {
 			return err
 		}
 		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("finalize task failed", "task_id", tasks[i].ID, "error", err)
+			slog.Warn("任务收尾处理失败", "task_id", tasks[i].ID, "error", err)
 		}
 	}
 	return nil
@@ -142,6 +148,12 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 	if task.PikPakAccountID == "" || task.PikPakRootFileID == "" {
 		return w.failVerify(ctx, task, errors.New("cleanup enabled but PikPak account/root file ID is missing"))
 	}
+	slog.Info("任务校验完成",
+		"task_id", task.ID,
+		"files", len(downloads),
+		"bytes", total,
+		"cleanup_enabled", w.options.CleanupEnabled,
+	)
 	task.Status = domain.TaskReadyToCleanup
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.CleanupDelay))
 	return w.store.SaveTask(ctx, task, "verify.complete",
@@ -155,6 +167,11 @@ func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
 		task.NextAttemptAt = nil
 		return w.store.SaveTask(ctx, task, "cleanup.failed", task.Error)
 	}
+	slog.Info("开始清理 PikPak 文件",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"root_file_id", task.PikPakRootFileID,
+	)
 	task.Status = domain.TaskPikPakDeleting
 	task.Error = ""
 	task.NextAttemptAt = nil
@@ -163,6 +180,12 @@ func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
 
 func (w *Finalizer) cleanup(ctx context.Context, task *domain.Task) error {
 	if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
+		slog.Warn("PikPak 文件清理失败",
+			"task_id", task.ID,
+			"account_id", task.PikPakAccountID,
+			"root_file_id", task.PikPakRootFileID,
+			"error", err,
+		)
 		task.RetryCount++
 		task.Error = err.Error()
 		if task.RetryCount >= w.options.MaxRetry {
@@ -177,6 +200,11 @@ func (w *Finalizer) cleanup(ctx context.Context, task *domain.Task) error {
 		}
 		return err
 	}
+	slog.Info("PikPak 文件清理完成",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"root_file_id", task.PikPakRootFileID,
+	)
 	return w.complete(ctx, task, "verified downloads and permanently deleted recorded PikPak root")
 }
 

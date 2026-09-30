@@ -116,7 +116,7 @@ func TestWebUIRoutes(t *testing.T) {
 		contentType string
 		contains    string
 	}{
-		{"/", "text/html", "setupForm"},
+		{"/", "text/html", "resourceDialog"},
 		{"/assets/styles.css", "text/css", "setup-screen"},
 		{"/assets/app.js", "javascript", "bootstrap"},
 	} {
@@ -339,5 +339,128 @@ func TestTaskCreationSnapshotsTargetAndDedupesSource(t *testing.T) {
 	}
 	if got := create("temp"); got.Code != http.StatusConflict {
 		t.Fatalf("different target: same source must remain 409, got %d", got.Code)
+	}
+}
+
+
+func TestRetryFailedAria2TaskResetsCountersAndKeepsHistory(t *testing.T) {
+	db := openTestStore(t)
+	server := New(db)
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "failed-aria2",
+		Source:          "https://example.invalid/file",
+		SourceType:      "https",
+		SourceKey:       "url:failed-aria2",
+		TargetID:        "movies",
+		TargetName:      "Movies",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads/movies",
+		Status:          domain.TaskAria2Failed,
+		PikPakAccountID: "pp01",
+		PikPakTaskID:    "remote-task",
+		PikPakRootFileID:"root-file",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status = domain.TaskAria2Failed
+	task.RetryCount = 10
+	task.Error = "aria2 下载失败"
+	if err := db.SaveTask(context.Background(), &task, "aria2.failed", task.Error); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceRemoteFiles(context.Background(), task.ID, []domain.RemoteFile{{
+		TaskID: task.ID, PikPakFileID: "file-1", Name: "movie.mkv",
+		RelativePath: "folder/movie.mkv", Size: 1234,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureDownloads(context.Background(), task.ID, "nas", func(_, _ string) string { return "0123456789abcdef" }); err != nil {
+		t.Fatal(err)
+	}
+	downloads, err := db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	download := downloads[0]
+	download.Status = domain.DownloadError
+	download.RetryCount = 10
+	download.EOFRetryCount = 10
+	download.LastError = "Failed to receive data, cause: EOF was received"
+	if err := db.SaveDownload(context.Background(), &download); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AddTaskEvent(context.Background(), task.ID, "aria2.eof_exhausted", "旧错误历史"); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", res.Code, res.Body.String())
+	}
+
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskWaitingAria2 {
+		t.Fatalf("want WAITING_ARIA2, got %s", got.Status)
+	}
+	if got.RetryCount != 0 || got.ManualRetryCount != 1 || got.Error != "" {
+		t.Fatalf("task retry counters were not reset: %#v", got)
+	}
+
+	downloads, err = db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downloads) != 1 {
+		t.Fatalf("unexpected downloads: %#v", downloads)
+	}
+	if downloads[0].Status != domain.DownloadPending ||
+		downloads[0].RetryCount != 0 ||
+		downloads[0].EOFRetryCount != 0 ||
+		downloads[0].Aria2GID != "" {
+		t.Fatalf("download retry state was not reset: %#v", downloads[0])
+	}
+
+	eventsRes := httptest.NewRecorder()
+	server.Handler().ServeHTTP(eventsRes, httptest.NewRequest(http.MethodGet, "/api/v1/tasks/"+task.ID+"/events?limit=20", nil))
+	if eventsRes.Code != http.StatusOK {
+		t.Fatalf("events: want 200, got %d: %s", eventsRes.Code, eventsRes.Body.String())
+	}
+	body := eventsRes.Body.String()
+	if !strings.Contains(body, "旧错误历史") || !strings.Contains(body, "task.manual_retry") {
+		t.Fatalf("retry did not preserve error history: %s", body)
+	}
+}
+
+func TestRetryRejectsNonFailedTask(t *testing.T) {
+	db := openTestStore(t)
+	server := New(db)
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID: "active-retry", Source: "https://example.invalid/active", SourceType: "https",
+		SourceKey: "url:active-retry", TargetID: "movies", TargetName: "Movies",
+		Aria2InstanceID: "nas", DownloadDir: "/downloads/movies",
+		Status: domain.TaskQueued, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry", nil))
+	if res.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", res.Code, res.Body.String())
 	}
 }

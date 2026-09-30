@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
@@ -21,6 +22,7 @@ type aria2Store interface {
 	EnsureDownloads(ctx context.Context, taskID, instanceID string, gidFor func(string, string) string) error
 	ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error)
 	SaveDownload(ctx context.Context, download *domain.Download) error
+	AddTaskEvent(ctx context.Context, taskID, eventType, message string) error
 }
 
 type Aria2Options struct {
@@ -54,6 +56,12 @@ func NewAria2(store aria2Store, provider pikpak.Provider, backend aria2.Backend,
 }
 
 func (w *Aria2Worker) Run(ctx context.Context) {
+	slog.Info("aria2 工作者已启动",
+		"worker_interval", w.options.WorkerInterval,
+		"status_interval", w.options.StatusInterval,
+		"retry_interval", w.options.RetryInterval,
+	)
+	defer slog.Info("aria2 工作者已停止")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -69,7 +77,7 @@ func (w *Aria2Worker) Run(ctx context.Context) {
 
 func (w *Aria2Worker) runOnceLogged(ctx context.Context) {
 	if err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("aria2 worker iteration failed", "error", err)
+		slog.Error("aria2 工作循环执行失败", "error", err)
 	}
 }
 
@@ -83,7 +91,7 @@ func (w *Aria2Worker) RunOnce(ctx context.Context) error {
 			return err
 		}
 		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("aria2 task processing failed", "task_id", tasks[i].ID, "error", err)
+			slog.Warn("aria2 任务处理失败", "task_id", tasks[i].ID, "error", err)
 		}
 	}
 	return nil
@@ -99,9 +107,18 @@ func (w *Aria2Worker) processTask(ctx context.Context, task *domain.Task) error 
 		if err != nil || !ready {
 			return err
 		}
-		if err := w.store.EnsureDownloads(ctx, task.ID, task.Aria2InstanceID, deterministicGID); err != nil {
+		gidFor := func(taskID, fileID string) string {
+			return deterministicGIDForAttempt(taskID, fileID, task.ManualRetryCount)
+		}
+		if err := w.store.EnsureDownloads(ctx, task.ID, task.Aria2InstanceID, gidFor); err != nil {
 			return w.retryTask(ctx, task, err)
 		}
+		slog.Info("开始向 aria2 分发任务",
+			"task_id", task.ID,
+			"target_id", task.TargetID,
+			"aria2_instance_id", task.Aria2InstanceID,
+			"download_dir", task.DownloadDir,
+		)
 		task.Status = domain.TaskAria2Downloading
 		task.RetryCount = 0
 		task.Error = ""
@@ -129,6 +146,14 @@ func (w *Aria2Worker) targetReady(ctx context.Context, task *domain.Task) (bool,
 }
 
 func (w *Aria2Worker) waitForTarget(ctx context.Context, task *domain.Task, reason string) error {
+	slog.Warn("aria2 下载目标暂不可用",
+		"task_id", task.ID,
+		"target_id", task.TargetID,
+		"aria2_instance_id", task.Aria2InstanceID,
+		"download_dir", task.DownloadDir,
+		"reason", reason,
+		"retry_in", w.options.RetryInterval,
+	)
 	task.Status = domain.TaskWaitingAria2
 	task.Error = reason
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
@@ -154,13 +179,20 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 			continue
 		}
 		switch download.Status {
-		case domain.DownloadPending, domain.DownloadError:
+		case domain.DownloadPending:
 			if err := w.submitDownload(ctx, task, download); err != nil {
-				slog.Warn("aria2 file submit failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+			}
+		case domain.DownloadError:
+			if downloadRetriesExhausted(download, w.options.MaxRetry) {
+				continue
+			}
+			if err := w.submitDownload(ctx, task, download); err != nil {
+				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
 		default:
 			if err := w.pollDownload(ctx, download); err != nil {
-				slog.Warn("aria2 file poll failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				slog.Warn("aria2 文件状态查询失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
 		}
 	}
@@ -175,14 +207,19 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 		if download.Status != domain.DownloadComplete {
 			allComplete = false
 		}
-		if download.Status == domain.DownloadError && download.RetryCount >= w.options.MaxRetry {
+		if download.Status == domain.DownloadError && downloadRetriesExhausted(&download, w.options.MaxRetry) {
 			failed = true
 		}
 	}
 	if failed {
-		return w.failTask(ctx, task, errors.New("one or more aria2 downloads exhausted retries"))
+		return w.failTask(ctx, task, errors.New("一个或多个 aria2 下载已耗尽重试次数"))
 	}
 	if allComplete {
+		slog.Info("aria2 下载全部完成",
+			"task_id", task.ID,
+			"aria2_instance_id", task.Aria2InstanceID,
+			"files", len(downloads),
+		)
 		task.Status = domain.TaskVerifying
 		task.RetryCount = 0
 		task.Error = ""
@@ -222,6 +259,12 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if gid != download.Aria2GID {
 		return w.retryDownload(ctx, download, fmt.Errorf("aria2 returned unexpected gid %q, want %q", gid, download.Aria2GID))
 	}
+	slog.Info("aria2 下载已提交",
+		"task_id", task.ID,
+		"aria2_instance_id", download.Aria2InstanceID,
+		"gid", gid,
+		"path", download.RelativePath,
+	)
 	download.Status = domain.DownloadSubmitted
 	download.RetryCount = 0
 	download.LastError = ""
@@ -232,17 +275,13 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 func (w *Aria2Worker) pollDownload(ctx context.Context, download *domain.Download) error {
 	status, err := w.backend.TellStatus(ctx, download.Aria2InstanceID, download.Aria2GID)
 	if err != nil {
-		download.Status = domain.DownloadPending
-		return w.retryDownload(ctx, download, err)
+		if isPikPakEOFFailure(err.Error()) {
+			return w.retryPikPakEOF(ctx, download, err.Error())
+		}
+		return w.retryPollDownload(ctx, download, err)
 	}
 	if status.Status == "error" {
-		_ = w.backend.Forget(ctx, download.Aria2InstanceID, download.Aria2GID)
-		download.Status = domain.DownloadPending
-		message := status.ErrorMessage
-		if message == "" {
-			message = "aria2 error code " + status.ErrorCode
-		}
-		return w.retryDownload(ctx, download, errors.New(message))
+		return w.handleAria2Error(ctx, download, status)
 	}
 	return w.applyStatus(ctx, download, status)
 }
@@ -274,13 +313,123 @@ func (w *Aria2Worker) applyStatus(ctx context.Context, download *domain.Download
 		download.Status = domain.DownloadPaused
 		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 	case "error":
-		download.Status = domain.DownloadPending
-		return w.retryDownload(ctx, download, errors.New(nonEmpty(status.ErrorMessage, "aria2 download failed")))
+		return w.handleAria2Error(ctx, download, status)
 	default:
 		download.Status = domain.DownloadSubmitted
 		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 	}
 	return w.store.SaveDownload(ctx, download)
+}
+
+func (w *Aria2Worker) handleAria2Error(ctx context.Context, download *domain.Download, status aria2.Status) error {
+	message := strings.TrimSpace(status.ErrorMessage)
+	if isPikPakEOFFailure(message) {
+		return w.retryPikPakEOF(ctx, download, message)
+	}
+	if message == "" {
+		if status.ErrorCode != "" {
+			message = "aria2 错误码 " + status.ErrorCode
+		} else {
+			message = "aria2 下载失败"
+		}
+	}
+
+	oldGID := download.Aria2GID
+	newGID := retryGID(oldGID)
+	download.Aria2GID = newGID
+	download.Status = domain.DownloadPending
+
+	slog.Warn("aria2 下载失败，保留失败记录并准备重试",
+		"task_id", download.TaskID,
+		"file_id", download.PikPakFileID,
+		"old_gid", oldGID,
+		"next_gid", newGID,
+		"error_code", status.ErrorCode,
+		"error_message", status.ErrorMessage,
+		"retry_in", w.options.RetryInterval,
+	)
+
+	return w.retryDownload(ctx, download, errors.New(message))
+}
+
+func isPikPakEOFFailure(message string) bool {
+	return strings.Contains(strings.ToLower(message), "eof was received")
+}
+
+func (w *Aria2Worker) retryPikPakEOF(ctx context.Context, download *domain.Download, message string) error {
+	if err := w.backend.Forget(ctx, download.Aria2InstanceID, download.Aria2GID); err != nil {
+		slog.Warn("检测到 PikPak 下载 EOF，但清理 aria2 失败记录失败",
+			"task_id", download.TaskID,
+			"file_id", download.PikPakFileID,
+			"gid", download.Aria2GID,
+			"error", err,
+			"retry_in", w.options.RetryInterval,
+		)
+		return w.retryPollDownload(ctx, download, errors.New(message))
+	}
+
+	download.LastError = message
+	if download.EOFRetryCount >= w.options.MaxRetry {
+		download.Status = domain.DownloadError
+		download.NextAttemptAt = nil
+		if err := w.store.SaveDownload(ctx, download); err != nil {
+			return err
+		}
+		eventMessage := fmt.Sprintf("PikPak 下载 EOF，已完成 %d/%d 次重试仍失败：%s",
+			download.EOFRetryCount, w.options.MaxRetry, message)
+		w.recordTaskEvent(ctx, download.TaskID, "aria2.eof_exhausted", eventMessage)
+		slog.Warn("PikPak 下载 EOF 已耗尽重试次数",
+			"task_id", download.TaskID,
+			"file_id", download.PikPakFileID,
+			"gid", download.Aria2GID,
+			"eof_retry_count", download.EOFRetryCount,
+			"max_retry", w.options.MaxRetry,
+			"error", message,
+		)
+		return errors.New(eventMessage)
+	}
+
+	download.EOFRetryCount++
+	attempt := download.EOFRetryCount
+	download.Status = domain.DownloadPending
+	download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
+	if err := w.store.SaveDownload(ctx, download); err != nil {
+		return err
+	}
+	eventMessage := fmt.Sprintf("PikPak 下载 EOF，准备第 %d/%d 次重试：%s", attempt, w.options.MaxRetry, message)
+	w.recordTaskEvent(ctx, download.TaskID, "aria2.eof_retry", eventMessage)
+	slog.Warn("检测到 PikPak 下载 EOF，已删除 aria2 失败记录并准备重新下载",
+		"task_id", download.TaskID,
+		"file_id", download.PikPakFileID,
+		"gid", download.Aria2GID,
+		"eof_retry_count", attempt,
+		"max_retry", w.options.MaxRetry,
+		"error", message,
+		"retry_in", w.options.RetryInterval,
+	)
+	return errors.New(message)
+}
+
+func retryGID(previous string) string {
+	sum := sha256.Sum256([]byte(previous + "\x00retry"))
+	return hex.EncodeToString(sum[:8])
+}
+
+func (w *Aria2Worker) retryPollDownload(ctx context.Context, download *domain.Download, cause error) error {
+	download.RetryCount++
+	download.LastError = cause.Error()
+	if download.RetryCount >= w.options.MaxRetry {
+		download.Status = domain.DownloadError
+		download.NextAttemptAt = nil
+	} else {
+		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
+	}
+	if err := w.store.SaveDownload(ctx, download); err != nil {
+		return err
+	}
+	w.recordTaskEvent(ctx, download.TaskID, "aria2.poll_retry",
+		fmt.Sprintf("aria2 状态查询失败，第 %d/%d 次重试：%s", download.RetryCount, w.options.MaxRetry, cause.Error()))
+	return cause
 }
 
 func (w *Aria2Worker) retryDownload(ctx context.Context, download *domain.Download, cause error) error {
@@ -296,6 +445,8 @@ func (w *Aria2Worker) retryDownload(ctx context.Context, download *domain.Downlo
 	if err := w.store.SaveDownload(ctx, download); err != nil {
 		return err
 	}
+	w.recordTaskEvent(ctx, download.TaskID, "aria2.file_retry",
+		fmt.Sprintf("aria2 文件下载失败，第 %d/%d 次重试：%s", download.RetryCount, w.options.MaxRetry, cause.Error()))
 	return cause
 }
 
@@ -319,8 +470,26 @@ func (w *Aria2Worker) failTask(ctx context.Context, task *domain.Task, cause err
 	return w.store.SaveTask(ctx, task, "aria2.failed", cause.Error())
 }
 
+func (w *Aria2Worker) recordTaskEvent(ctx context.Context, taskID, eventType, message string) {
+	if err := w.store.AddTaskEvent(ctx, taskID, eventType, message); err != nil {
+		slog.Warn("记录任务错误历史失败", "task_id", taskID, "event_type", eventType, "error", err)
+	}
+}
+
+func downloadRetriesExhausted(download *domain.Download, maxRetry int) bool {
+	return download.RetryCount >= maxRetry || download.EOFRetryCount >= maxRetry
+}
+
 func deterministicGID(taskID, fileID string) string {
-	sum := sha256.Sum256([]byte(taskID + "\x00" + fileID))
+	return deterministicGIDForAttempt(taskID, fileID, 0)
+}
+
+func deterministicGIDForAttempt(taskID, fileID string, manualRetry int) string {
+	value := taskID + "\x00" + fileID
+	if manualRetry > 0 {
+		value += "\x00manual:" + strconv.Itoa(manualRetry)
+	}
+	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:8])
 }
 

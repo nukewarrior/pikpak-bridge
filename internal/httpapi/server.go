@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -20,10 +21,14 @@ import (
 
 type taskStore interface {
 	CreateTask(context.Context, domain.Task) error
+	SaveTask(context.Context, *domain.Task, string, string) error
 	GetTask(context.Context, string) (domain.Task, error)
 	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
 	ListDownloads(context.Context, string) ([]domain.Download, error)
+	ListTaskEvents(context.Context, string, int) ([]domain.TaskEvent, error)
+	ResetDownloadsForRetry(context.Context, string, bool) error
+	ClearTransferState(context.Context, string) error
 	ActiveResourceReferences(context.Context) ([]string, []string, error)
 }
 
@@ -79,6 +84,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/tasks", s.listTasks)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}", s.getTask)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/downloads", s.getTaskDownloads)
+	s.mux.HandleFunc("GET /api/v1/tasks/{id}/events", s.getTaskEvents)
+	s.mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.retryFailedTask)
 	s.registerWebUI()
 }
 
@@ -345,6 +352,81 @@ func (s *Server) getTaskDownloads(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"downloads": downloads})
 }
 
+func (s *Server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
+	taskID := r.PathValue("id")
+	if _, err := s.store.GetTask(r.Context(), taskID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get task")
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	events, err := s.store.ListTaskEvents(r.Context(), taskID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list task events")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
+	task, err := s.store.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get task")
+		return
+	}
+
+	previousStatus := task.Status
+	switch task.Status {
+	case domain.TaskPikPakFailed:
+		if err := s.store.ClearTransferState(r.Context(), task.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset PikPak transfer state")
+			return
+		}
+		task.PikPakAccountID = ""
+		task.PikPakTaskID = ""
+		task.PikPakRootFileID = ""
+		task.Status = domain.TaskWaitingPikPakAccount
+	case domain.TaskAria2Failed:
+		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, false); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset aria2 downloads")
+			return
+		}
+		task.Status = domain.TaskWaitingAria2
+	case domain.TaskVerifyFailed:
+		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, true); err != nil {
+			writeError(w, http.StatusInternalServerError, "reset verification downloads")
+			return
+		}
+		task.Status = domain.TaskWaitingAria2
+	case domain.TaskCleanupFailed:
+		task.Status = domain.TaskReadyToCleanup
+	default:
+		writeError(w, http.StatusConflict, "only failed tasks can be retried")
+		return
+	}
+
+	task.ManualRetryCount++
+	task.RetryCount = 0
+	task.Error = ""
+	task.NextAttemptAt = nil
+	task.CompletedAt = nil
+	message := fmt.Sprintf("手动重试：从 %s 重新开始，第 %d 次手动重试，重新获得 10 次重试机会",
+		previousStatus, task.ManualRetryCount)
+	if err := s.store.SaveTask(r.Context(), &task, "task.manual_retry", message); err != nil {
+		writeError(w, http.StatusInternalServerError, "retry task")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, task)
+}
+
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	tasks, err := s.store.ListTasks(r.Context(), limit)
@@ -363,11 +445,13 @@ type accountStatusView struct {
 	QuotaRemaining int64     `json:"quota_remaining"`
 	QuotaTotal     int64     `json:"quota_total"`
 	StorageFree    int64     `json:"storage_free"`
+	StorageTotal   int64     `json:"storage_total"`
 	ActiveJobs     int       `json:"active_jobs"`
 	MaxJobs        int       `json:"max_jobs"`
 	State          string    `json:"state"`
 	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
 	Error          string    `json:"error,omitempty"`
+	CheckedAt      time.Time `json:"checked_at,omitempty"`
 }
 
 type aria2StatusView struct {
@@ -377,7 +461,8 @@ type aria2StatusView struct {
 	Healthy   bool   `json:"healthy"`
 	Active    int    `json:"active"`
 	Waiting   int    `json:"waiting"`
-	Error     string `json:"error,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
 }
 
 func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
@@ -412,10 +497,12 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 				QuotaRemaining: snapshot.QuotaRemaining,
 				QuotaTotal:     snapshot.QuotaTotal,
 				StorageFree:    snapshot.StorageFree,
+				StorageTotal:   snapshot.StorageTotal,
 				ActiveJobs:     snapshot.ActiveJobs,
 				MaxJobs:        snapshot.MaxJobs,
 				State:          snapshot.State,
 				CooldownUntil:  snapshot.CooldownUntil,
+				CheckedAt:      time.Now().UTC(),
 			}
 			if view.ID == "" {
 				view.ID = id
@@ -437,9 +524,10 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 	for i := range accounts {
 		if accounts[i].ID == "" {
 			accounts[i] = accountStatusView{
-				ID:    accountIDs[i],
-				State: "TIMEOUT",
-				Error: "status refresh timed out",
+				ID:        accountIDs[i],
+				State:     "TIMEOUT",
+				Error:     "status refresh timed out",
+				CheckedAt: time.Now().UTC(),
 			}
 		}
 	}
@@ -454,6 +542,7 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 			Active:    snapshot.Active,
 			Waiting:   snapshot.Waiting,
 			Error:     snapshot.Error,
+			CheckedAt: time.Now().UTC(),
 		})
 	}
 
