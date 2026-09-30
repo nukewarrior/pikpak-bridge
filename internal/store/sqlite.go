@@ -625,7 +625,7 @@ func (s *SQLite) ActiveResourceReferences(ctx context.Context) ([]string, []stri
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT DISTINCT pikpak_account_id, aria2_instance_id
 		FROM tasks
-		WHERE status NOT IN (?, ?, ?, ?, ?, ?, ?)
+		WHERE status NOT IN (?, ?, ?, ?, ?, ?)
 	`,
 		string(domain.TaskCompleted),
 		string(domain.TaskCancelled),
@@ -633,7 +633,6 @@ func (s *SQLite) ActiveResourceReferences(ctx context.Context) ([]string, []stri
 		string(domain.TaskAria2Failed),
 		string(domain.TaskVerifyFailed),
 		string(domain.TaskCleanupFailed),
-		"",
 	)
 	if err != nil {
 		return nil, nil, err
