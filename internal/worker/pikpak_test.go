@@ -20,24 +20,19 @@ type fakeProvider struct {
 func (f *fakeProvider) RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error) {
 	return f.snapshot, nil
 }
-
 func (f *fakeProvider) SubmitOffline(context.Context, string, string) (pikpak.OfflineTask, error) {
 	f.submits++
 	return f.submit, nil
 }
-
 func (f *fakeProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return f.submit, nil
 }
-
 func (f *fakeProvider) ListFiles(context.Context, string, string) ([]pikpak.RemoteFile, error) {
 	return f.files, nil
 }
-
 func (f *fakeProvider) GetDownloadURL(context.Context, string, string) (string, error) {
 	return "", nil
 }
-
 func (f *fakeProvider) DeletePermanently(context.Context, string, string) error {
 	return nil
 }
@@ -51,13 +46,17 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 
 	now := time.Now().UTC()
 	task := domain.Task{
-		ID:         "task-1",
-		Source:     "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
-		SourceType: "magnet",
-		SourceKey:  "btih:0123456789ABCDEF0123456789ABCDEF01234567",
-		Status:     domain.TaskQueued,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:              "task-1",
+		Source:          "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+		SourceType:      "magnet",
+		SourceKey:       "btih:0123456789ABCDEF0123456789ABCDEF01234567",
+		TargetID:        "movies",
+		TargetName:      "电影",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/media/movies",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := db.CreateTask(context.Background(), task); err != nil {
 		t.Fatal(err)
@@ -65,7 +64,8 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 
 	provider := &fakeProvider{
 		snapshot: pikpak.AccountSnapshot{
-			Name:           "pp1",
+			ID:             "pp1",
+			Name:           "主账号",
 			Enabled:        true,
 			Healthy:        true,
 			QuotaRemaining: 3,
@@ -78,25 +78,23 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 			Status:     pikpak.PhaseComplete,
 			RootFileID: "root-file",
 		},
-		files: []pikpak.RemoteFile{
-			{
-				ID:           "file-1",
-				ParentID:     "root-file",
-				Name:         "movie.mkv",
-				RelativePath: "movie.mkv",
-				Size:         1234,
-			},
-		},
+		files: []pikpak.RemoteFile{{
+			ID:           "file-1",
+			ParentID:     "root-file",
+			Name:         "movie.mkv",
+			RelativePath: "movie.mkv",
+			Size:         1234,
+		}},
 	}
 	w := New(db, provider, Options{
-		AccountNames:   []string{"pp1"},
+		AccountIDs:     []string{"pp1"},
 		QuotaRefresh:   time.Hour,
 		StatusInterval: time.Millisecond,
 		RetryInterval:  time.Millisecond,
 		MaxRetry:       3,
 	})
 
-	for i := 0; i < 4; i++ {
+	for i := 0; i < 3; i++ {
 		if err := w.RunOnce(context.Background()); err != nil {
 			t.Fatal(err)
 		}
@@ -109,7 +107,7 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 	if got.Status != domain.TaskWaitingAria2 {
 		t.Fatalf("want %s, got %s", domain.TaskWaitingAria2, got.Status)
 	}
-	if got.PikPakAccount != "pp1" || got.PikPakTaskID != "remote-task" || got.PikPakRootFileID != "root-file" {
+	if got.PikPakAccountID != "pp1" || got.PikPakTaskID != "remote-task" || got.PikPakRootFileID != "root-file" {
 		t.Fatalf("unexpected PikPak state: %#v", got)
 	}
 	files, err := db.ListRemoteFiles(context.Background(), task.ID)
