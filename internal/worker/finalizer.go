@@ -49,6 +49,12 @@ func NewFinalizer(store finalizeStore, provider pikpak.Provider, options Finaliz
 }
 
 func (w *Finalizer) Run(ctx context.Context) {
+	slog.Info("finalizer started",
+		"verify_size", w.options.VerifySize,
+		"cleanup_enabled", w.options.CleanupEnabled,
+		"cleanup_delay", w.options.CleanupDelay,
+	)
+	defer slog.Info("finalizer stopped")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -142,6 +148,12 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 	if task.PikPakAccountID == "" || task.PikPakRootFileID == "" {
 		return w.failVerify(ctx, task, errors.New("cleanup enabled but PikPak account/root file ID is missing"))
 	}
+	slog.Info("task verification complete",
+		"task_id", task.ID,
+		"files", len(downloads),
+		"bytes", total,
+		"cleanup_enabled", w.options.CleanupEnabled,
+	)
 	task.Status = domain.TaskReadyToCleanup
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.CleanupDelay))
 	return w.store.SaveTask(ctx, task, "verify.complete",
@@ -155,6 +167,11 @@ func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
 		task.NextAttemptAt = nil
 		return w.store.SaveTask(ctx, task, "cleanup.failed", task.Error)
 	}
+	slog.Info("pikpak cleanup started",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"root_file_id", task.PikPakRootFileID,
+	)
 	task.Status = domain.TaskPikPakDeleting
 	task.Error = ""
 	task.NextAttemptAt = nil
@@ -163,6 +180,12 @@ func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
 
 func (w *Finalizer) cleanup(ctx context.Context, task *domain.Task) error {
 	if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
+		slog.Warn("pikpak cleanup failed",
+			"task_id", task.ID,
+			"account_id", task.PikPakAccountID,
+			"root_file_id", task.PikPakRootFileID,
+			"error", err,
+		)
 		task.RetryCount++
 		task.Error = err.Error()
 		if task.RetryCount >= w.options.MaxRetry {
@@ -177,6 +200,11 @@ func (w *Finalizer) cleanup(ctx context.Context, task *domain.Task) error {
 		}
 		return err
 	}
+	slog.Info("pikpak cleanup complete",
+		"task_id", task.ID,
+		"account_id", task.PikPakAccountID,
+		"root_file_id", task.PikPakRootFileID,
+	)
 	return w.complete(ctx, task, "verified downloads and permanently deleted recorded PikPak root")
 }
 
