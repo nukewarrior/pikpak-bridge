@@ -475,7 +475,9 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 	default:
 		if task.PikPakLastActivityAt != nil && now.Sub(*task.PikPakLastActivityAt) >= w.options.StallTimeout {
 			stalledFor := now.Sub(*task.PikPakLastActivityAt).Round(time.Second)
-			cancelErr := w.provider.CancelOfflineTask(ctx, task.PikPakAccountID, task.PikPakTaskID)
+			cancelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			cancelErr := w.provider.CancelOfflineTask(cancelCtx, task.PikPakAccountID, task.PikPakTaskID)
+			cancel()
 			w.invalidateAccount(task.PikPakAccountID)
 			task.Status = domain.TaskPikPakFailed
 			task.NextAttemptAt = nil
