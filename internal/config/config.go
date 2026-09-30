@@ -22,7 +22,6 @@ type Config struct {
 
 type ServerConfig struct {
 	Listen string `yaml:"listen"`
-	Token  string `yaml:"token,omitempty"`
 }
 
 type DatabaseConfig struct {
