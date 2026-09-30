@@ -49,6 +49,8 @@ type accountRuntime struct {
 	reserved  int
 }
 
+const allQuotaExhaustedError = "all enabled PikPak accounts have exhausted cloud download quota"
+
 func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 	if options.WorkerInterval <= 0 {
 		options.WorkerInterval = 2 * time.Second
@@ -147,10 +149,13 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	now := time.Now().UTC()
 	if len(w.options.AccountIDs) == 0 {
 		slog.Warn("PikPak 任务等待：未配置账号", "task_id", task.ID)
-		task.Status = domain.TaskWaitingPikPakAccount
-		task.Error = "no PikPak account configured"
-		task.NextAttemptAt = timePtr(now.Add(w.options.RetryInterval))
-		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
+		return w.waitForAccount(
+			ctx,
+			task,
+			"no PikPak account configured",
+			now.Add(w.options.RetryInterval),
+			"pikpak.waiting_account",
+		)
 	}
 
 	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
@@ -223,12 +228,23 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 
 	selected, err := scheduler.SelectPikPakAccount(snapshots, w.options.MinFreeSpace, now)
 	if err != nil {
+		waitUntil := now.Add(w.options.RetryInterval)
+		waitError := "no eligible PikPak account"
+		waitEvent := "pikpak.waiting_account"
+		if allEnabledAccountsQuotaExhausted(snapshots, len(w.options.AccountIDs)) {
+			waitUntil = w.nextQuotaRefreshAt(now)
+			waitError = allQuotaExhaustedError
+			waitEvent = "pikpak.waiting_quota"
+		}
+
 		slog.Warn("PikPak 任务等待：没有可用账号",
 			"task_id", task.ID,
 			"configured_accounts", len(w.options.AccountIDs),
 			"snapshots", len(snapshots),
 			"required_free_space", w.options.MinFreeSpace,
-			"retry_in", w.options.RetryInterval,
+			"reason", waitError,
+			"retry_in", waitUntil.Sub(now),
+			"next_attempt_at", waitUntil,
 		)
 		for _, snapshot := range snapshots {
 			reasons := accountEligibilityReasons(snapshot, w.options.MinFreeSpace, now)
@@ -249,10 +265,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 				"last_used_at", snapshot.LastUsedAt,
 			)
 		}
-		task.Status = domain.TaskWaitingPikPakAccount
-		task.Error = "no eligible PikPak account"
-		task.NextAttemptAt = timePtr(now.Add(w.options.RetryInterval))
-		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
+		return w.waitForAccount(ctx, task, waitError, waitUntil, waitEvent)
 	}
 
 	slog.Info("已选择 PikPak 账号",
@@ -495,6 +508,63 @@ func (w *Worker) retry(
 	task.Status = retryStatus
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
 	return w.store.SaveTask(ctx, task, "pikpak.retry", cause.Error())
+}
+
+func (w *Worker) waitForAccount(
+	ctx context.Context,
+	task *domain.Task,
+	reason string,
+	nextAttempt time.Time,
+	eventType string,
+) error {
+	stateChanged := task.Status != domain.TaskWaitingPikPakAccount || task.Error != reason
+	task.Status = domain.TaskWaitingPikPakAccount
+	task.Error = reason
+	task.NextAttemptAt = timePtr(nextAttempt)
+	if !stateChanged {
+		eventType = ""
+	}
+	return w.store.SaveTask(ctx, task, eventType, reason)
+}
+
+func allEnabledAccountsQuotaExhausted(snapshots []pikpak.AccountSnapshot, configured int) bool {
+	if configured == 0 || len(snapshots) != configured {
+		return false
+	}
+	enabled := 0
+	for _, snapshot := range snapshots {
+		if !snapshot.Enabled {
+			continue
+		}
+		enabled++
+		if snapshot.QuotaRemaining > 0 {
+			return false
+		}
+	}
+	return enabled > 0
+}
+
+func (w *Worker) nextQuotaRefreshAt(now time.Time) time.Time {
+	next := now.Add(w.options.QuotaRefresh)
+	found := false
+	for _, id := range w.options.AccountIDs {
+		runtime := w.runtime(id)
+		if !runtime.has || !runtime.snapshot.Enabled || runtime.snapshot.QuotaRemaining > 0 || runtime.refreshed.IsZero() {
+			continue
+		}
+		candidate := runtime.refreshed.Add(w.options.QuotaRefresh)
+		if runtime.cooldown.After(now) && runtime.cooldown.After(candidate) {
+			candidate = runtime.cooldown
+		}
+		if !found || candidate.Before(next) {
+			next = candidate
+			found = true
+		}
+	}
+	if !next.After(now) {
+		return now.Add(w.options.WorkerInterval)
+	}
+	return next
 }
 
 func (w *Worker) runtime(id string) *accountRuntime {
