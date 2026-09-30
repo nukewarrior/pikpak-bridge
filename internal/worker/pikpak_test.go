@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,11 +13,13 @@ import (
 )
 
 type fakeProvider struct {
-	snapshot pikpak.AccountSnapshot
-	submit   pikpak.OfflineTask
-	rootName string
-	files    []pikpak.RemoteFile
-	submits  int
+	snapshot  pikpak.AccountSnapshot
+	submit    pikpak.OfflineTask
+	rootName  string
+	files     []pikpak.RemoteFile
+	submits   int
+	cancelled int
+	cancelErr error
 }
 
 func (f *fakeProvider) RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error) {
@@ -30,7 +33,8 @@ func (f *fakeProvider) GetOfflineTask(context.Context, string, string) (pikpak.O
 	return f.submit, nil
 }
 func (f *fakeProvider) CancelOfflineTask(context.Context, string, string) error {
-	return nil
+	f.cancelled++
+	return f.cancelErr
 }
 func (f *fakeProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
 	return pikpak.ResolvedFiles{RootName: f.rootName, Files: f.files}, nil
@@ -370,5 +374,138 @@ func TestNextQuotaRefreshAtRespectsAccountCooldown(t *testing.T) {
 	got := w.nextQuotaRefreshAt(now)
 	if !got.Equal(runtime.cooldown) {
 		t.Fatalf("want cooldown end %s, got %s", runtime.cooldown, got)
+	}
+}
+
+
+func TestWorkerCancelsStalledPikPakTaskAndReleasesManagedSlot(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/stalled.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "stalled-task",
+		Source:          "magnet:?xt=urn:btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		SourceType:      "magnet",
+		SourceKey:       "btih:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+		TargetID:        "default",
+		TargetName:      "默认",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err = db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastActivity := now.Add(-21 * time.Minute)
+	task.Status = domain.TaskPikPakRunning
+	task.PikPakAccountID = "pp1"
+	task.PikPakTaskID = "remote-stalled"
+	task.PikPakPhase = pikpak.PhaseRunning
+	task.PikPakProgress = 0
+	task.PikPakLastActivityAt = &lastActivity
+	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &fakeProvider{
+		submit: pikpak.OfflineTask{
+			ID:       "remote-stalled",
+			Status:   pikpak.PhaseRunning,
+			Progress: 0,
+		},
+	}
+	w := New(db, provider, Options{
+		AccountIDs:     []string{"pp1"},
+		StatusInterval: time.Second,
+		StallTimeout:   20 * time.Minute,
+		RetryInterval:  time.Second,
+		MaxRetry:       10,
+	})
+
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskPikPakFailed {
+		t.Fatalf("want PIKPAK_FAILED, got %s", got.Status)
+	}
+	if provider.cancelled != 1 {
+		t.Fatalf("want stalled remote task cancelled once, got %d", provider.cancelled)
+	}
+	if !strings.Contains(got.Error, "已判定卡死") {
+		t.Fatalf("unexpected stalled error: %q", got.Error)
+	}
+	counts, err := db.PikPakActiveCounts(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["pp1"] != 0 {
+		t.Fatalf("stalled task still occupies managed slot: %#v", counts)
+	}
+	events, err := db.ListTaskEvents(context.Background(), task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].Type != "pikpak.stalled" {
+		t.Fatalf("want pikpak.stalled event, got %#v", events)
+	}
+}
+
+func TestWorkerIgnoresUnmanagedRemoteJobsForBridgeConcurrency(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/managed-concurrency.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "queued-behind-ghosts",
+		Source:          "https://example.invalid/new-file",
+		SourceType:      "https",
+		SourceKey:       "url:new-file",
+		TargetID:        "default",
+		TargetName:      "默认",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &poolProvider{snapshots: map[string]pikpak.AccountSnapshot{
+		"pp1": {
+			ID: "pp1", Name: "PikPak 1", Enabled: true, Healthy: true,
+			QuotaRemaining: 3, QuotaTotal: 3, StorageFree: 10_000_000_000,
+			ActiveJobs: 2, MaxJobs: 2,
+		},
+	}}
+	w := New(db, provider, Options{
+		AccountIDs:    []string{"pp1"},
+		QuotaRefresh:  time.Hour,
+		RetryInterval: time.Minute,
+		MaxRetry:      3,
+	})
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.submits) != 1 || provider.submits[0] != "pp1" {
+		t.Fatalf("unmanaged remote jobs blocked bridge scheduling: %#v", provider.submits)
 	}
 }
