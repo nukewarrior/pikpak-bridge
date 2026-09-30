@@ -13,9 +13,9 @@
       <div class="setup-brand">
         <div class="brand-mark"><span></span><span></span></div>
         <div>
-          <span class="eyebrow">FIRST RUN</span>
-          <h1>设置 PikPak Bridge</h1>
-          <p>账号池负责自动选择离线账号，Download Target 决定最终下载位置。</p>
+          <span id="setupEyebrow" class="eyebrow">FIRST RUN</span>
+          <h1 id="setupTitle">设置 PikPak Bridge</h1>
+          <p id="setupDescription">账号池负责自动选择离线账号，Download Target 决定最终下载位置。</p>
         </div>
       </div>
 
@@ -49,9 +49,12 @@
             <strong>配置将保存到 /data/config.yaml</strong>
             <span>开发阶段为破坏性配置模型，不兼容旧 config/database。</span>
           </div>
-          <button id="setupSubmitBtn" class="primary-btn" type="submit">
-            <span>保存并开始使用</span><span aria-hidden="true">→</span>
-          </button>
+          <div class="setup-action-buttons">
+            <button id="settingsCancelBtn" class="secondary-btn hidden" type="button">取消</button>
+            <button id="setupSubmitBtn" class="primary-btn" type="submit">
+              <span id="setupSubmitLabel">保存并开始使用</span><span aria-hidden="true">→</span>
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -65,6 +68,7 @@
       </div>
       <div class="top-actions">
         <div id="healthBadge" class="health-badge"><span class="dot"></span><span>连接中</span></div>
+        <button id="settingsBtn" class="secondary-btn" type="button">设置</button>
         <button id="refreshBtn" class="icon-btn" type="button" title="刷新">↻</button>
       </div>
     </header>
