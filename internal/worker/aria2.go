@@ -174,7 +174,14 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 			continue
 		}
 		switch download.Status {
-		case domain.DownloadPending, domain.DownloadError:
+		case domain.DownloadPending:
+			if err := w.submitDownload(ctx, task, download); err != nil {
+				slog.Warn("aria2 file submit failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+			}
+		case domain.DownloadError:
+			if download.RetryCount >= w.options.MaxRetry {
+				continue
+			}
 			if err := w.submitDownload(ctx, task, download); err != nil {
 				slog.Warn("aria2 file submit failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
@@ -263,8 +270,7 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 func (w *Aria2Worker) pollDownload(ctx context.Context, download *domain.Download) error {
 	status, err := w.backend.TellStatus(ctx, download.Aria2InstanceID, download.Aria2GID)
 	if err != nil {
-		download.Status = domain.DownloadPending
-		return w.retryDownload(ctx, download, err)
+		return w.retryPollDownload(ctx, download, err)
 	}
 	if status.Status == "error" {
 		_ = w.backend.Forget(ctx, download.Aria2InstanceID, download.Aria2GID)
@@ -312,6 +318,21 @@ func (w *Aria2Worker) applyStatus(ctx context.Context, download *domain.Download
 		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 	}
 	return w.store.SaveDownload(ctx, download)
+}
+
+func (w *Aria2Worker) retryPollDownload(ctx context.Context, download *domain.Download, cause error) error {
+	download.RetryCount++
+	download.LastError = cause.Error()
+	if download.RetryCount >= w.options.MaxRetry {
+		download.Status = domain.DownloadError
+		download.NextAttemptAt = nil
+	} else {
+		download.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
+	}
+	if err := w.store.SaveDownload(ctx, download); err != nil {
+		return err
+	}
+	return cause
 }
 
 func (w *Aria2Worker) retryDownload(ctx context.Context, download *domain.Download, cause error) error {
