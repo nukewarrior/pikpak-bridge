@@ -363,11 +363,13 @@ type accountStatusView struct {
 	QuotaRemaining int64     `json:"quota_remaining"`
 	QuotaTotal     int64     `json:"quota_total"`
 	StorageFree    int64     `json:"storage_free"`
+	StorageTotal   int64     `json:"storage_total"`
 	ActiveJobs     int       `json:"active_jobs"`
 	MaxJobs        int       `json:"max_jobs"`
 	State          string    `json:"state"`
 	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
 	Error          string    `json:"error,omitempty"`
+	CheckedAt      time.Time `json:"checked_at,omitempty"`
 }
 
 type aria2StatusView struct {
@@ -377,7 +379,8 @@ type aria2StatusView struct {
 	Healthy   bool   `json:"healthy"`
 	Active    int    `json:"active"`
 	Waiting   int    `json:"waiting"`
-	Error     string `json:"error,omitempty"`
+	Error     string    `json:"error,omitempty"`
+	CheckedAt time.Time `json:"checked_at,omitempty"`
 }
 
 func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
@@ -412,10 +415,12 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 				QuotaRemaining: snapshot.QuotaRemaining,
 				QuotaTotal:     snapshot.QuotaTotal,
 				StorageFree:    snapshot.StorageFree,
+				StorageTotal:   snapshot.StorageTotal,
 				ActiveJobs:     snapshot.ActiveJobs,
 				MaxJobs:        snapshot.MaxJobs,
 				State:          snapshot.State,
 				CooldownUntil:  snapshot.CooldownUntil,
+				CheckedAt:      time.Now().UTC(),
 			}
 			if view.ID == "" {
 				view.ID = id
@@ -437,9 +442,10 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 	for i := range accounts {
 		if accounts[i].ID == "" {
 			accounts[i] = accountStatusView{
-				ID:    accountIDs[i],
-				State: "TIMEOUT",
-				Error: "status refresh timed out",
+				ID:        accountIDs[i],
+				State:     "TIMEOUT",
+				Error:     "status refresh timed out",
+				CheckedAt: time.Now().UTC(),
 			}
 		}
 	}
@@ -454,6 +460,7 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 			Active:    snapshot.Active,
 			Waiting:   snapshot.Waiting,
 			Error:     snapshot.Error,
+			CheckedAt: time.Now().UTC(),
 		})
 	}
 
