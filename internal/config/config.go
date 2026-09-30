@@ -56,7 +56,6 @@ type Aria2Instance struct {
 	Name      string `yaml:"name"`
 	URL       string `yaml:"url"`
 	Secret    string `yaml:"secret,omitempty"`
-	MaxActive int    `yaml:"max_active"`
 	Enabled   *bool  `yaml:"enabled,omitempty"`
 }
 
@@ -216,9 +215,6 @@ func Validate(cfg *Config) error {
 	for i, instance := range cfg.Aria2.Instances {
 		if strings.TrimSpace(instance.ID) == "" || strings.TrimSpace(instance.Name) == "" || strings.TrimSpace(instance.URL) == "" {
 			return fmt.Errorf("aria2.instances[%d] requires id, name and url", i)
-		}
-		if instance.MaxActive <= 0 {
-			return fmt.Errorf("aria2.instances[%d].max_active must be greater than zero", i)
 		}
 		if _, exists := instanceIDs[instance.ID]; exists {
 			return fmt.Errorf("duplicate aria2 instance id %q", instance.ID)
