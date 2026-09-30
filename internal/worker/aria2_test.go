@@ -13,9 +13,11 @@ import (
 )
 
 type fakeAria2 struct {
-	added          map[string]bool
-	addCalls       int
-	tellStatusErr  error
+	added         map[string]bool
+	addCalls      int
+	tellStatusErr error
+	statusByGID   map[string]aria2.Status
+	forgetCalls   int
 }
 
 func (f *fakeAria2) Snapshots(context.Context) []aria2.InstanceSnapshot {
@@ -46,6 +48,11 @@ func (f *fakeAria2) TellStatus(_ context.Context, instanceID, gid string) (aria2
 	if instanceID != "a1" {
 		return aria2.Status{}, errors.New("wrong instance")
 	}
+	if f.statusByGID != nil {
+		if status, ok := f.statusByGID[gid]; ok {
+			return status, nil
+		}
+	}
 	if f.added != nil && f.added[gid] {
 		return aria2.Status{
 			GID: gid, Status: "complete", TotalLength: "1234", CompletedLength: "1234",
@@ -53,7 +60,10 @@ func (f *fakeAria2) TellStatus(_ context.Context, instanceID, gid string) (aria2
 	}
 	return aria2.Status{}, errors.New("not found")
 }
-func (f *fakeAria2) Forget(context.Context, string, string) error { return nil }
+func (f *fakeAria2) Forget(context.Context, string, string) error {
+	f.forgetCalls++
+	return nil
+}
 
 type fakeURLProvider struct{}
 
@@ -235,5 +245,111 @@ func TestAria2PollErrorDoesNotResubmit(t *testing.T) {
 	}
 	if backend.addCalls != 1 {
 		t.Fatalf("transient poll error caused resubmit: add calls = %d", backend.addCalls)
+	}
+}
+
+
+func TestAria2ConfirmedFailureKeepsOldRecordAndRotatesGID(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/confirmed-error.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "task-confirmed-error",
+		Source:          "https://example.invalid/file",
+		SourceType:      "https",
+		SourceKey:       "url:confirmed-error",
+		TargetID:        "movies",
+		TargetName:      "电影",
+		Aria2InstanceID: "a1",
+		DownloadDir:     "/downloads/movies",
+		Status:          domain.TaskWaitingAria2,
+		PikPakAccountID: "pp1",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err = db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status = domain.TaskWaitingAria2
+	task.PikPakAccountID = "pp1"
+	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceRemoteFiles(context.Background(), task.ID, []domain.RemoteFile{{
+		TaskID: task.ID, PikPakFileID: "file-1", Name: "movie.mkv",
+		RelativePath: "folder/movie.mkv", Size: 1234,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	backend := &fakeAria2{}
+	w := NewAria2(db, fakeURLProvider{}, backend, Aria2Options{
+		StatusInterval: time.Millisecond,
+		RetryInterval:  time.Millisecond,
+		MaxRetry:       3,
+	})
+
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	downloads, err := db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downloads) != 1 {
+		t.Fatalf("unexpected downloads: %#v", downloads)
+	}
+	oldGID := downloads[0].Aria2GID
+
+	backend.statusByGID = map[string]aria2.Status{
+		oldGID: {
+			GID:             oldGID,
+			Status:          "error",
+			TotalLength:     "1234",
+			CompletedLength: "321",
+			ErrorCode:       "3",
+			ErrorMessage:    "resource not found",
+		},
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	downloads, err = db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if downloads[0].Aria2GID == oldGID {
+		t.Fatalf("want retry gid different from failed gid %s", oldGID)
+	}
+	if downloads[0].Aria2GID != retryGID(oldGID) {
+		t.Fatalf("unexpected retry gid %s", downloads[0].Aria2GID)
+	}
+	if downloads[0].Status != domain.DownloadPending {
+		t.Fatalf("want pending after confirmed failure, got %s", downloads[0].Status)
+	}
+	if backend.forgetCalls != 0 {
+		t.Fatalf("failed aria2 result was removed: forget calls = %d", backend.forgetCalls)
+	}
+	if backend.addCalls != 1 {
+		t.Fatalf("confirmed failure should schedule retry, not immediately resubmit: add calls = %d", backend.addCalls)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.addCalls != 2 {
+		t.Fatalf("want retry submitted with a new gid, add calls = %d", backend.addCalls)
 	}
 }
