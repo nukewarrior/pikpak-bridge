@@ -40,6 +40,8 @@ let targetsRefreshBusy = false;
 let toastTimer;
 let currentConfigView = "accounts";
 let configState = {pikpak_accounts:[], aria2_instances:[], targets:[]};
+let resourceStatus = {pikpak_accounts:{}, aria2_instances:{}, updated_at:null};
+let resourceStatusBusy = false;
 let editingResource = null;
 
 function esc(value) {
@@ -163,6 +165,9 @@ async function openConfigView(view="accounts") {
     let data = {pikpak_accounts:[], aria2_instances:[], targets:[]};
     if (appConfigured) data = await request("/api/v1/config");
     showConfigView(data, view);
+    if (view === "accounts" || view === "aria2") {
+      refreshResourceStatus(false);
+    }
   } catch (err) {
     toast("配置加载失败：" + err.message, true);
   }
@@ -221,6 +226,87 @@ function enabledBadge(enabled) {
     : '<span class="badge success">已启用</span>';
 }
 
+
+function resourceStatusBadge(kind, item) {
+  if (item.enabled === false) return '<span class="badge">已停用</span>';
+  const status = kind === "account"
+    ? resourceStatus.pikpak_accounts[item.id]
+    : resourceStatus.aria2_instances[item.id];
+  if (!status) return '<span class="badge">未检测</span>';
+  if (kind === "account") {
+    if (status.state === "QUOTA_EXHAUSTED") return '<span class="badge warn">额度用尽</span>';
+    if (status.state === "STORAGE_FULL") return '<span class="badge warn">空间已满</span>';
+    if (status.state === "CAPTCHA_REQUIRED") return '<span class="badge fail">需要验证</span>';
+    if (status.state === "AUTH_FAILED") return '<span class="badge fail">登录失败</span>';
+  }
+  if (status.healthy) return '<span class="badge success">正常</span>';
+  return '<span class="badge fail">异常</span>';
+}
+
+function checkedText(status) {
+  if (!status?.checked_at) return "尚未检测";
+  return "检测于 " + fmtTime(status.checked_at);
+}
+
+function accountStatusMeta(item) {
+  const status = resourceStatus.pikpak_accounts[item.id];
+  if (!status) return '<div class="resource-health-meta muted">尚未检测账号状态</div>';
+  if (status.error) {
+    return `<div class="resource-health-meta error">${esc(status.error)}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
+  }
+  const quota = status.quota_total > 0
+    ? `云下载 ${status.quota_remaining} / ${status.quota_total}`
+    : `云下载剩余 ${status.quota_remaining ?? 0}`;
+  const storage = status.storage_total > 0
+    ? `空间 ${fmtBytes(status.storage_free)} / ${fmtBytes(status.storage_total)}`
+    : `剩余空间 ${fmtBytes(status.storage_free)}`;
+  const jobs = `并发 ${status.active_jobs || 0} / ${status.max_jobs || item.max_jobs || 0}`;
+  return `<div class="resource-health-meta">${esc(quota)} · ${esc(storage)} · ${esc(jobs)}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
+}
+
+function aria2StatusMeta(item) {
+  const status = resourceStatus.aria2_instances[item.id];
+  if (!status) return '<div class="resource-health-meta muted">尚未检测 RPC 状态</div>';
+  if (status.error) {
+    return `<div class="resource-health-meta error">${esc(status.error)}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
+  }
+  return `<div class="resource-health-meta">活动 ${status.active || 0} · 等待 ${status.waiting || 0}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
+}
+
+async function refreshResourceStatus(showToast=true) {
+  if (resourceStatusBusy || !appConfigured) return;
+  resourceStatusBusy = true;
+  const accountBtn = $("checkAccountsBtn");
+  const aria2Btn = $("checkAria2Btn");
+  [accountBtn, aria2Btn].forEach(btn => {
+    if (!btn) return;
+    btn.disabled = true;
+    btn.dataset.oldText = btn.textContent;
+    btn.textContent = "检测中…";
+  });
+  try {
+    const data = await request("/api/v1/status");
+    resourceStatus = {
+      pikpak_accounts: Object.fromEntries((data.pikpak_accounts || []).map(x => [x.id, x])),
+      aria2_instances: Object.fromEntries((data.aria2_instances || []).map(x => [x.id, x])),
+      updated_at: data.updated_at || null
+    };
+    if (currentConfigView === "accounts" || currentConfigView === "aria2") {
+      renderResourcePage(currentConfigView);
+    }
+    if (showToast) toast("检测完成。");
+  } catch (err) {
+    if (showToast) toast("检测失败：" + err.message, true);
+  } finally {
+    resourceStatusBusy = false;
+    [accountBtn, aria2Btn].forEach(btn => {
+      if (!btn) return;
+      btn.disabled = false;
+      btn.textContent = btn.dataset.oldText || "立即检测";
+    });
+  }
+}
+
 function resourceActions(kind, id) {
   return `
     <div class="resource-row-actions">
@@ -247,9 +333,10 @@ function renderResourcePage(view=currentConfigView) {
         <div class="resource-row-icon purple">P</div>
         <div class="resource-row-main">
           <div class="resource-row-title">${esc(item.name || "PikPak 账号")}</div>
-          <div class="resource-row-meta">${esc(item.username || "未填写账号")} · 最大并发 ${item.max_jobs || 2}</div>
+          <div class="resource-row-meta">${esc(item.username || "未填写账号")}</div>
+          ${accountStatusMeta(item)}
         </div>
-        <div class="resource-row-state">${enabledBadge(item.enabled)}</div>
+        <div class="resource-row-state">${resourceStatusBadge("account", item)}</div>
         ${resourceActions("account", item.id)}
       </article>`).join("") : emptyResourceList("PikPak 账号");
     bindResourceActions($("accountResourceList"));
@@ -265,8 +352,9 @@ function renderResourcePage(view=currentConfigView) {
         <div class="resource-row-main">
           <div class="resource-row-title">${esc(item.name || "aria2 实例")}</div>
           <div class="resource-row-meta">${esc(item.url || "未填写 RPC 地址")}</div>
+          ${aria2StatusMeta(item)}
         </div>
-        <div class="resource-row-state">${enabledBadge(item.enabled)}</div>
+        <div class="resource-row-state">${resourceStatusBadge("aria2", item)}</div>
         ${resourceActions("aria2", item.id)}
       </article>`).join("") : emptyResourceList("aria2 实例");
     bindResourceActions($("aria2ResourceList"));
@@ -504,6 +592,9 @@ async function persistConfigState() {
   configState = normalizeConfigData(await request("/api/v1/config"));
   renderResourcePage(currentConfigView);
   await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
+  if (currentConfigView === "accounts" || currentConfigView === "aria2") {
+    await refreshResourceStatus(false);
+  }
 }
 
 async function saveResource() {
@@ -768,6 +859,8 @@ $("settingsCancelBtn").addEventListener("click", showHome);
 $("addAccountBtn").addEventListener("click", () => openResourceDialog("account"));
 $("addAria2Btn").addEventListener("click", () => openResourceDialog("aria2"));
 $("addTargetBtn").addEventListener("click", () => openResourceDialog("target"));
+$("checkAccountsBtn").addEventListener("click", () => refreshResourceStatus(true));
+$("checkAria2Btn").addEventListener("click", () => refreshResourceStatus(true));
 
 $("resourceDialogClose").addEventListener("click", () => $("resourceDialog").close());
 $("resourceCancelBtn").addEventListener("click", () => $("resourceDialog").close());
