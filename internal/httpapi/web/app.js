@@ -33,9 +33,19 @@ const ACTIVE = new Set([
   "VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"
 ]);
 
+const FAILED_TASKS = new Set([
+  "PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_FAILED"
+]);
+
+const TERMINAL_TASKS = new Set([
+  "COMPLETED","CANCELLED","PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_FAILED"
+]);
+
 let appConfigured = false;
 let dashboardStarted = false;
 let taskRefreshBusy = false;
+let historyRefreshBusy = false;
+let historyFilter = "all";
 let targetsRefreshBusy = false;
 let toastTimer;
 let currentConfigView = "accounts";
@@ -124,6 +134,7 @@ function setActiveNav(id) {
 
 function showHome() {
   $("setupScreen").classList.add("hidden");
+  $("historyView").classList.add("hidden");
   $("homeView").classList.remove("hidden");
   setActiveNav("homeNav");
 }
@@ -165,6 +176,7 @@ function showConfigView(data, view="accounts") {
 
   configState = normalizeConfigData(data);
   $("homeView").classList.add("hidden");
+  $("historyView").classList.add("hidden");
   $("setupScreen").classList.remove("hidden");
 
   document.querySelectorAll(".resource-page").forEach(section => section.classList.add("hidden"));
@@ -808,6 +820,88 @@ async function loadTasks() {
   }
 }
 
+function historyMatches(task) {
+  if (!TERMINAL_TASKS.has(task.status)) return false;
+  if (historyFilter === "completed") return task.status === "COMPLETED";
+  if (historyFilter === "failed") return FAILED_TASKS.has(task.status);
+  if (historyFilter === "cancelled") return task.status === "CANCELLED";
+  return true;
+}
+
+function historyTime(task) {
+  return task.completed_at || task.updated_at || task.created_at;
+}
+
+function renderHistoryTasks(tasks) {
+  const filtered = tasks.filter(historyMatches);
+  $("historyTaskCount").textContent = `${filtered.length} 条记录`;
+  $("historyUpdated").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
+
+  if (!filtered.length) {
+    $("historyTaskList").innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">↺</div>
+        <strong>暂无符合条件的历史任务</strong>
+        <span>任务结束后会出现在这里。</span>
+      </div>`;
+    return;
+  }
+
+  $("historyTaskList").innerHTML = filtered.map(task => {
+    const target = task.target_name || task.target_id || "—";
+    const account = task.pikpak_account_id || "—";
+    const error = task.error ? `<div class="history-error">${esc(truncate(task.error, 90))}</div>` : "";
+    return `
+      <article class="history-task" data-task-id="${esc(task.id)}">
+        <div class="task-main">
+          <div class="task-icon">${sourceIcon()}</div>
+          <div style="min-width:0">
+            <div class="task-name" title="${esc(task.source)}">${esc(taskTitle(task))}</div>
+            <div class="task-meta">PikPak: ${esc(account)} · 目标: ${esc(target)} · aria2: ${esc(task.aria2_instance_id || "—")}</div>
+            ${error}
+          </div>
+        </div>
+        <div class="history-time">
+          <strong>${esc(fmtTime(historyTime(task)))}</strong>
+          <span>${task.completed_at ? "结束时间" : "最后更新"}</span>
+        </div>
+        <div class="task-status">${statusBadge(task.status)}</div>
+        <button class="detail-btn" type="button" aria-label="查看详情">
+          <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+        </button>
+      </article>`;
+  }).join("");
+
+  $("historyTaskList").querySelectorAll("[data-task-id]").forEach(row => {
+    row.addEventListener("click", () => openTask(row.dataset.taskId));
+  });
+}
+
+async function loadHistoryTasks() {
+  if (historyRefreshBusy) return;
+  historyRefreshBusy = true;
+  try {
+    const data = await request("/api/v1/tasks?limit=200");
+    renderHistoryTasks(data.tasks || []);
+  } catch (err) {
+    $("historyTaskList").innerHTML = `
+      <div class="empty-state">
+        <strong>历史任务加载失败</strong>
+        <span>${esc(err.message)}</span>
+      </div>`;
+  } finally {
+    historyRefreshBusy = false;
+  }
+}
+
+function showHistory() {
+  $("homeView").classList.add("hidden");
+  $("setupScreen").classList.add("hidden");
+  $("historyView").classList.remove("hidden");
+  setActiveNav("historyNav");
+  loadHistoryTasks();
+}
+
 async function openTask(id) {
   const dialog = $("taskDialog");
   $("dialogTitle").textContent = id;
@@ -877,8 +971,19 @@ async function bootstrap() {
 }
 
 $("homeNav").addEventListener("click", showHome);
+$("historyNav").addEventListener("click", showHistory);
 document.querySelectorAll("[data-config-view]").forEach(button => {
   button.addEventListener("click", () => openConfigView(button.dataset.configView || "settings"));
+});
+
+document.querySelectorAll("[data-history-filter]").forEach(button => {
+  button.addEventListener("click", async () => {
+    historyFilter = button.dataset.historyFilter || "all";
+    document.querySelectorAll("[data-history-filter]").forEach(item => {
+      item.classList.toggle("active", item === button);
+    });
+    await loadHistoryTasks();
+  });
 });
 
 $("settingsCancelBtn").addEventListener("click", showHome);
@@ -945,7 +1050,9 @@ $("targetSelect").addEventListener("change", event => {
 
 $("refreshBtn").addEventListener("click", async () => {
   $("refreshBtn").disabled = true;
-  await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
+  const jobs = [loadHealth(), loadTargets(), loadTasks()];
+  if (!$("historyView").classList.contains("hidden")) jobs.push(loadHistoryTasks());
+  await Promise.all(jobs);
   $("refreshBtn").disabled = false;
 });
 
