@@ -29,6 +29,9 @@ func (f *fakeProvider) SubmitOffline(context.Context, string, string) (pikpak.Of
 func (f *fakeProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return f.submit, nil
 }
+func (f *fakeProvider) CancelOfflineTask(context.Context, string, string) error {
+	return nil
+}
 func (f *fakeProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
 	return pikpak.ResolvedFiles{RootName: f.rootName, Files: f.files}, nil
 }
@@ -166,6 +169,10 @@ func (p *poolProvider) SubmitOffline(_ context.Context, id, _ string) (pikpak.Of
 
 func (p *poolProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return pikpak.OfflineTask{}, nil
+}
+
+func (p *poolProvider) CancelOfflineTask(context.Context, string, string) error {
+	return nil
 }
 
 func (p *poolProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
