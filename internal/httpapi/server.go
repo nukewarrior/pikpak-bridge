@@ -21,6 +21,7 @@ import (
 
 type taskStore interface {
 	CreateTask(context.Context, domain.Task) error
+	SaveTask(context.Context, *domain.Task, string, string) error
 	GetTask(context.Context, string) (domain.Task, error)
 	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
