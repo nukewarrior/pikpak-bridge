@@ -690,6 +690,40 @@ svg { display: block; }
 .setup-list {
   border-top: 1px solid #edf1f7;
 }
+
+.general-settings {
+  border-top: 1px solid #edf1f7;
+}
+.general-setting-row {
+  min-height: 76px;
+  padding: 17px 20px;
+  border-top: 1px solid #edf1f7;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.general-setting-row:first-child { border-top: 0; }
+.general-setting-row > div {
+  display: grid;
+  gap: 5px;
+}
+.general-setting-row strong {
+  color: #35425a;
+  font-size: 11px;
+}
+.general-setting-row span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.muted-label {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #f3f6fb;
+  color: #8794a9 !important;
+  font-weight: 700;
+}
 .setup-list:empty::after {
   content: "暂未配置";
   min-height: 74px;
