@@ -32,17 +32,15 @@ const ACTIVE = new Set([
   "PIKPAK_COMPLETE","RESOLVING_FILES","WAITING_ARIA2","ARIA2_DOWNLOADING",
   "VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"
 ]);
-const FAILED = new Set(["PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_FAILED"]);
 
-let taskRefreshBusy = false;
-let statusRefreshBusy = false;
-let targetsRefreshBusy = false;
+let appConfigured = false;
 let dashboardStarted = false;
+let taskRefreshBusy = false;
+let targetsRefreshBusy = false;
 let toastTimer;
 let accountSeq = 0;
 let aria2Seq = 0;
 let targetSeq = 0;
-let configMode = "setup";
 
 function esc(value) {
   return String(value ?? "")
@@ -50,7 +48,7 @@ function esc(value) {
     .replaceAll('"',"&quot;").replaceAll("'","&#039;");
 }
 
-function truncate(value, length=70) {
+function truncate(value, length=72) {
   const s = String(value ?? "");
   return s.length > length ? s.slice(0, length - 1) + "…" : s;
 }
@@ -100,6 +98,79 @@ async function request(url, options) {
   return body;
 }
 
+function setActiveNav(id) {
+  document.querySelectorAll(".nav-item").forEach(item => item.classList.toggle("active", item.id === id));
+}
+
+function showHome() {
+  $("setupScreen").classList.add("hidden");
+  $("homeView").classList.remove("hidden");
+  setActiveNav("homeNav");
+}
+
+function showSettings(data, sectionId="") {
+  resetConfigForm();
+  $("homeView").classList.add("hidden");
+  $("setupScreen").classList.remove("hidden");
+
+  (data?.pikpak_accounts || []).forEach(item => $("setupAccounts").appendChild(accountEntry(item)));
+  (data?.aria2_instances || []).forEach(item => $("setupAria2").appendChild(aria2Entry(item)));
+  (data?.targets || []).forEach(item => $("setupTargets").appendChild(targetEntry(item)));
+  refreshTargetAria2Options();
+
+  const navId = sectionId === "accountSection" ? "accountNav"
+    : sectionId === "aria2Section" ? "aria2Nav"
+    : sectionId === "targetSection" ? "targetNav"
+    : "settingsNav";
+  setActiveNav(navId);
+
+  if (sectionId) {
+    requestAnimationFrame(() => {
+      const section = $(sectionId);
+      if (!section) return;
+      section.scrollIntoView({behavior:"smooth", block:"start"});
+      section.classList.add("highlight");
+      setTimeout(() => section.classList.remove("highlight"), 1200);
+    });
+  } else {
+    window.scrollTo({top:0, behavior:"smooth"});
+  }
+}
+
+async function openSettings(sectionId="") {
+  try {
+    let data = {pikpak_accounts:[], aria2_instances:[], targets:[]};
+    if (appConfigured) data = await request("/api/v1/config");
+    showSettings(data, sectionId);
+  } catch (err) {
+    toast("配置加载失败：" + err.message, true);
+  }
+}
+
+function taskTitle(task) {
+  const source = String(task.source || "");
+  if (source.startsWith("magnet:?")) {
+    try {
+      const params = new URLSearchParams(source.slice(source.indexOf("?") + 1));
+      const dn = params.get("dn");
+      if (dn) return dn;
+    } catch (_) {}
+    return "Magnet 下载任务";
+  }
+  try {
+    const url = new URL(source);
+    const last = url.pathname.split("/").filter(Boolean).pop();
+    if (last) return decodeURIComponent(last);
+    return url.hostname || source;
+  } catch (_) {
+    return truncate(source, 58) || "下载任务";
+  }
+}
+
+function sourceIcon() {
+  return `<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v6h5"/></svg>`;
+}
+
 function accountEntry(values={}) {
   accountSeq += 1;
   const index = accountSeq;
@@ -138,13 +209,7 @@ function accountEntry(values={}) {
         <input data-field="password" type="password" autocomplete="new-password" placeholder="${values.password_set ? "已保存，留空保持不变" : "PikPak 登录密码"}" ${values.password_set ? "" : "required"}>
       </div>
     </div>`;
-  div.querySelector(".remove-btn").addEventListener("click", () => {
-    if ($("setupAccounts").children.length <= 1) {
-      toast("至少保留一个 PikPak 账号。", true);
-      return;
-    }
-    div.remove();
-  });
+  div.querySelector(".remove-btn").addEventListener("click", () => div.remove());
   return div;
 }
 
@@ -185,10 +250,6 @@ function aria2Entry(values={}) {
   div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
   div.querySelector('[data-field="name"]').addEventListener("input", refreshTargetAria2Options);
   div.querySelector(".remove-btn").addEventListener("click", () => {
-    if ($("setupAria2").children.length <= 1) {
-      toast("至少保留一个 aria2 实例。", true);
-      return;
-    }
     div.remove();
     refreshTargetAria2Options();
   });
@@ -234,6 +295,7 @@ function targetEntry(values={}) {
         <span class="hint">填写 aria2 所在机器看到的目录。</span>
       </div>
     </div>`;
+
   div.querySelector('[data-field="default"]').addEventListener("change", (event) => {
     if (!event.target.checked) return;
     $("setupTargets").querySelectorAll('[data-field="default"]').forEach(el => {
@@ -241,10 +303,6 @@ function targetEntry(values={}) {
     });
   });
   div.querySelector(".remove-btn").addEventListener("click", () => {
-    if ($("setupTargets").children.length <= 1) {
-      toast("至少保留一个 Download Target。", true);
-      return;
-    }
     const wasDefault = div.querySelector('[data-field="default"]').checked;
     div.remove();
     if (wasDefault) {
@@ -259,6 +317,15 @@ function targetEntry(values={}) {
     }
   });
   return div;
+}
+
+function resetConfigForm() {
+  $("setupAccounts").innerHTML = "";
+  $("setupAria2").innerHTML = "";
+  $("setupTargets").innerHTML = "";
+  accountSeq = 0;
+  aria2Seq = 0;
+  targetSeq = 0;
 }
 
 function configuredAria2Options() {
@@ -277,49 +344,6 @@ function refreshTargetAria2Options() {
       : '<option value="">请先添加 aria2 实例</option>';
     if (instances.some(x => x.id === current)) select.value = current;
   });
-}
-
-function resetConfigForm() {
-  $("setupAccounts").innerHTML = "";
-  $("setupAria2").innerHTML = "";
-  $("setupTargets").innerHTML = "";
-  accountSeq = 0;
-  aria2Seq = 0;
-  targetSeq = 0;
-}
-
-function showSetup(mode="setup", data=null) {
-  configMode = mode;
-  resetConfigForm();
-  $("dashboard").classList.add("hidden");
-  $("setupScreen").classList.remove("hidden");
-
-  const editing = mode === "settings";
-  $("setupEyebrow").textContent = editing ? "SETTINGS" : "FIRST RUN";
-  $("setupTitle").textContent = editing ? "配置 PikPak Bridge" : "设置 PikPak Bridge";
-  $("setupDescription").textContent = editing
-    ? "修改账号池、aria2 实例和 Download Target；保存后服务会热重载。"
-    : "账号池负责自动选择离线账号，Download Target 决定最终下载位置。";
-  $("setupSubmitLabel").textContent = editing ? "保存并热重载" : "保存并开始使用";
-  $("settingsCancelBtn").classList.toggle("hidden", !editing);
-
-  if (editing && data) {
-    (data.pikpak_accounts || []).forEach(item => $("setupAccounts").appendChild(accountEntry(item)));
-    (data.aria2_instances || []).forEach(item => $("setupAria2").appendChild(aria2Entry(item)));
-    (data.targets || []).forEach(item => $("setupTargets").appendChild(targetEntry(item)));
-  } else {
-    $("setupAccounts").appendChild(accountEntry());
-    $("setupAria2").appendChild(aria2Entry({id:"unraid", name:"Unraid"}));
-    $("setupTargets").appendChild(targetEntry({
-      id:"default", name:"默认下载", aria2_instance:"unraid", dir:"/downloads/pikpak", default:true
-    }));
-  }
-  refreshTargetAria2Options();
-}
-
-function showDashboard() {
-  $("setupScreen").classList.add("hidden");
-  $("dashboard").classList.remove("hidden");
 }
 
 function collectSetup() {
@@ -349,43 +373,22 @@ function collectSetup() {
   return {pikpak_accounts: accounts, aria2_instances: instances, targets};
 }
 
-async function bootstrap() {
-  try {
-    const state = await request("/api/v1/setup");
-    if (!state.configured) {
-      showSetup();
-      return;
-    }
-    showDashboard();
-    startDashboard();
-  } catch (err) {
-    showSetup();
-    toast("无法读取初始化状态：" + err.message, true);
-  }
-}
-
-function startDashboard() {
-  if (dashboardStarted) return;
-  dashboardStarted = true;
-  loadHealth();
-  loadTargets();
-  loadTasks();
-  loadStatus();
-  setInterval(loadHealth, 15000);
-  setInterval(loadTasks, 3000);
-  setInterval(loadStatus, 60000);
-  setInterval(loadTargets, 60000);
-}
-
 async function loadHealth() {
   const badge = $("healthBadge");
+  const sidebarDot = $("sidebarStatusDot");
+  const sidebarText = $("sidebarStatusText");
   try {
     const health = await request("/healthz");
-    badge.className = health.configured ? "health-badge ok" : "health-badge";
-    badge.innerHTML = '<span class="dot"></span><span>' + (health.configured ? "服务在线" : "等待配置") + '</span>';
+    appConfigured = Boolean(health.configured);
+    badge.querySelector(".status-dot").className = "status-dot ok";
+    badge.querySelector("span:last-child").textContent = "服务运行中";
+    sidebarDot.className = "status-dot ok";
+    sidebarText.textContent = appConfigured ? "服务运行中" : "服务运行中 · 待配置";
   } catch (_) {
-    badge.className = "health-badge bad";
-    badge.innerHTML = '<span class="dot"></span><span>连接失败</span>';
+    badge.querySelector(".status-dot").className = "status-dot bad";
+    badge.querySelector("span:last-child").textContent = "连接失败";
+    sidebarDot.className = "status-dot bad";
+    sidebarText.textContent = "连接失败";
   }
 }
 
@@ -397,23 +400,20 @@ async function loadTargets() {
     const targets = data.targets || [];
     const select = $("targetSelect");
     const current = select.value;
+    if (!targets.length) {
+      select.innerHTML = '<option value="">尚未配置下载目标</option>';
+      $("composerHint").textContent = "还没有下载目标。可以从左侧“下载目标”添加，主页仍可正常使用。";
+      return;
+    }
     select.innerHTML = targets.map(t =>
-      `<option value="${esc(t.id)}">${esc(t.name)} · ${esc(t.aria2_instance)} · ${esc(t.dir)}</option>`
+      `<option value="${esc(t.id)}">${esc(t.name)} · ${esc(t.dir)}</option>`
     ).join("");
     const preferred = targets.find(t => t.id === current) || targets.find(t => t.default) || targets[0];
     if (preferred) select.value = preferred.id;
-    $("submitBtn").disabled = targets.length === 0;
-
-    $("targetCount").textContent = targets.length;
-    $("targetList").innerHTML = targets.length ? targets.map(t => `
-      <div class="resource">
-        <div class="resource-top"><span class="resource-name">${esc(t.name)}</span>${t.default ? '<span class="badge success">默认</span>' : ''}</div>
-        <div class="resource-meta"><span>${esc(t.id)}</span><span>${esc(t.aria2_instance)}</span></div>
-        <div class="resource-meta"><span>目录</span><span title="${esc(t.dir)}">${esc(truncate(t.dir, 32))}</span></div>
-      </div>
-    `).join("") : '<div class="empty-block">未配置 Download Target</div>';
+    $("composerHint").textContent = "PikPak 账号由系统自动选择，任务会固定到你选择的下载目标。";
   } catch (err) {
-    $("targetList").innerHTML = `<div class="empty-block">目标获取失败：${esc(err.message)}</div>`;
+    $("targetSelect").innerHTML = '<option value="">下载目标获取失败</option>';
+    $("composerHint").textContent = "无法读取下载目标：" + err.message;
   } finally {
     targetsRefreshBusy = false;
   }
@@ -430,8 +430,16 @@ async function progressForTask(task) {
     const total = files.reduce((sum, x) => sum + Number(x.total_length || x.expected_size || 0), 0);
     const done = files.reduce((sum, x) => sum + Number(x.completed_length || 0), 0);
     const completedFiles = files.filter(x => x.status === "COMPLETE").length;
-    return { total, done, completedFiles, count:files.length, pct: total > 0 ? Math.min(100, done / total * 100) : 0 };
-  } catch (_) { return null; }
+    return {
+      total,
+      done,
+      completedFiles,
+      count: files.length,
+      pct: total > 0 ? Math.min(100, done / total * 100) : 0
+    };
+  } catch (_) {
+    return null;
+  }
 }
 
 async function loadTasks() {
@@ -439,96 +447,72 @@ async function loadTasks() {
   taskRefreshBusy = true;
   try {
     const data = await request("/api/v1/tasks?limit=100");
-    const tasks = data.tasks || [];
-    const progressEntries = await Promise.all(tasks.map(async t => [t.id, await progressForTask(t)]));
-    const progress = Object.fromEntries(progressEntries);
-
-    $("statTotal").textContent = tasks.length;
-    $("statActive").textContent = tasks.filter(t => ACTIVE.has(t.status)).length;
-    $("statCompleted").textContent = tasks.filter(t => t.status === "COMPLETED").length;
-    $("statFailed").textContent = tasks.filter(t => FAILED.has(t.status)).length;
+    const activeTasks = (data.tasks || []).filter(task => ACTIVE.has(task.status));
+    $("activeTaskCount").textContent = activeTasks.length;
     $("taskUpdated").textContent = "更新于 " + new Date().toLocaleTimeString("zh-CN", {hour12:false});
 
-    const rows = $("taskRows");
-    if (!tasks.length) {
-      rows.innerHTML = '<tr><td colspan="6" class="empty">还没有任务，先在上方添加一个链接。</td></tr>';
+    if (!activeTasks.length) {
+      $("activeTaskList").innerHTML = `
+        <div class="empty-state">
+          <div class="empty-icon">↓</div>
+          <strong>暂无进行中的任务</strong>
+          <span>在上方输入链接即可开始。</span>
+        </div>`;
       return;
     }
-    rows.innerHTML = tasks.map(task => {
+
+    const progressEntries = await Promise.all(activeTasks.map(async task => [task.id, await progressForTask(task)]));
+    const progress = Object.fromEntries(progressEntries);
+
+    $("activeTaskList").innerHTML = activeTasks.map(task => {
       const p = progress[task.id];
-      let progressHtml = '<span class="muted">—</span>';
-      if (p) {
-        const label = p.total > 0 ? `${p.pct.toFixed(1)}% · ${fmtBytes(p.done)} / ${fmtBytes(p.total)}` : `${p.completedFiles}/${p.count} 文件`;
-        progressHtml = `<div class="progress"><div class="progress-track"><div class="progress-bar" style="width:${p.pct.toFixed(2)}%"></div></div><div class="progress-label">${esc(label)}</div></div>`;
-      } else if (task.status === "COMPLETED") {
-        progressHtml = '<span class="muted">100%</span>';
-      }
-      const targetLabel = `${task.target_name || task.target_id || "—"} · ${task.aria2_instance_id || "—"}`;
-      return `<tr data-task-id="${esc(task.id)}">
-        <td>${statusBadge(task.status)}</td>
-        <td class="source-cell"><div class="source-main" title="${esc(task.source)}">${esc(truncate(task.source))}</div><div class="source-sub">${esc(task.source_type || "")} · ${esc(task.id)}</div></td>
-        <td>${progressHtml}</td>
-        <td>${esc(task.pikpak_account_id || "—")}</td>
-        <td title="${esc(task.download_dir || "")}">${esc(targetLabel)}</td>
-        <td class="muted">${fmtTime(task.updated_at)}</td>
-      </tr>`;
+      const pct = p ? p.pct : 0;
+      const progressLabel = p
+        ? (p.total > 0 ? `${fmtBytes(p.done)} / ${fmtBytes(p.total)}` : `${p.completedFiles}/${p.count} 文件`)
+        : STATUS[task.status]?.[0] || "处理中";
+      const target = task.target_name || task.target_id || "—";
+      const account = task.pikpak_account_id || "自动选择";
+      return `
+        <article class="active-task" data-task-id="${esc(task.id)}">
+          <div class="task-main">
+            <div class="task-icon">${sourceIcon()}</div>
+            <div style="min-width:0">
+              <div class="task-name" title="${esc(task.source)}">${esc(taskTitle(task))}</div>
+              <div class="task-meta">PikPak: ${esc(account)} · 目标: ${esc(target)} · aria2: ${esc(task.aria2_instance_id || "—")}</div>
+            </div>
+          </div>
+          <div class="task-progress-wrap">
+            <div class="task-progress-top">
+              <div class="progress-track"><div class="progress-bar" style="width:${pct.toFixed(2)}%"></div></div>
+              <span class="progress-percent">${p ? pct.toFixed(0) + "%" : "—"}</span>
+            </div>
+            <div class="progress-meta">${esc(progressLabel)}</div>
+          </div>
+          <div class="task-status">${statusBadge(task.status)}</div>
+          <button class="detail-btn" type="button" aria-label="查看详情">
+            <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
+          </button>
+        </article>`;
     }).join("");
 
-    rows.querySelectorAll("tr[data-task-id]").forEach(row => {
+    $("activeTaskList").querySelectorAll("[data-task-id]").forEach(row => {
       row.addEventListener("click", () => openTask(row.dataset.taskId));
     });
   } catch (err) {
-    $("taskRows").innerHTML = `<tr><td colspan="6" class="empty">任务加载失败：${esc(err.message)}</td></tr>`;
+    $("activeTaskList").innerHTML = `
+      <div class="empty-state">
+        <strong>任务加载失败</strong>
+        <span>${esc(err.message)}</span>
+      </div>`;
   } finally {
     taskRefreshBusy = false;
-  }
-}
-
-function resourceBadge(ok, state) {
-  if (ok) return '<span class="badge success">正常</span>';
-  if (state === "DISABLED") return '<span class="badge">禁用</span>';
-  return `<span class="badge fail">${esc(state || "异常")}</span>`;
-}
-
-async function loadStatus() {
-  if (statusRefreshBusy) return;
-  statusRefreshBusy = true;
-  try {
-    const data = await request("/api/v1/status");
-    const accounts = data.pikpak_accounts || [];
-    const instances = data.aria2_instances || [];
-    $("accountCount").textContent = accounts.length;
-    $("aria2Count").textContent = instances.length;
-
-    $("accountList").innerHTML = accounts.length ? accounts.map(a => `
-      <div class="resource">
-        <div class="resource-top"><span class="resource-name">${esc(a.name || a.id)}</span>${resourceBadge(a.enabled && a.healthy, a.state)}</div>
-        <div class="resource-meta"><span>${esc(a.id)}</span><span>离线额度 <b>${a.quota_remaining ?? 0}/${a.quota_total ?? 0}</b></span></div>
-        <div class="resource-meta"><span>任务 ${a.active_jobs ?? 0}/${a.max_jobs ?? 0}</span><span>${fmtBytes(a.storage_free)}</span></div>
-        ${a.error ? `<div class="resource-error">${esc(a.error)}</div>` : ""}
-      </div>
-    `).join("") : '<div class="empty-block">未配置 PikPak 账号</div>';
-
-    $("aria2List").innerHTML = instances.length ? instances.map(a => `
-      <div class="resource">
-        <div class="resource-top"><span class="resource-name">${esc(a.name || a.id)}</span>${resourceBadge(a.enabled && a.healthy, a.enabled ? "OFFLINE" : "DISABLED")}</div>
-        <div class="resource-meta"><span>${esc(a.id)}</span><span>Active <b>${a.active ?? 0}</b></span></div>
-        <div class="resource-meta"><span>Waiting</span><span>${a.waiting ?? 0}</span></div>
-        ${a.error ? `<div class="resource-error">${esc(a.error)}</div>` : ""}
-      </div>
-    `).join("") : '<div class="empty-block">未配置 aria2 实例</div>';
-  } catch (err) {
-    $("accountList").innerHTML = `<div class="empty-block">状态获取失败：${esc(err.message)}</div>`;
-    $("aria2List").innerHTML = '<div class="empty-block">状态获取失败</div>';
-  } finally {
-    statusRefreshBusy = false;
   }
 }
 
 async function openTask(id) {
   const dialog = $("taskDialog");
   $("dialogTitle").textContent = id;
-  $("dialogBody").innerHTML = '<div class="empty-block">正在加载…</div>';
+  $("dialogBody").innerHTML = '<div class="empty-state"><span>正在加载…</span></div>';
   dialog.showModal();
   try {
     const [task, downloadsData] = await Promise.all([
@@ -551,36 +535,58 @@ async function openTask(id) {
         <dt>更新时间</dt><dd>${fmtTime(task.updated_at)}</dd>
         <dt>错误</dt><dd>${esc(task.error || "—")}</dd>
       </dl>
-      <div class="detail-section"><h3>下载文件（${downloads.length}）</h3>
+      <div class="detail-section">
+        <h3>下载文件（${downloads.length}）</h3>
         ${downloads.length ? downloads.map(d => `
           <div class="download-row">
-            <div><div class="download-name">${esc(d.relative_path)}</div><div class="download-meta">GID ${esc(d.aria2_gid || "—")} · ${esc(d.aria2_instance_id || "—")}</div></div>
-            <div>${statusBadge(d.status)}</div>
-            <div class="download-meta">${fmtBytes(d.completed_length)} / ${fmtBytes(d.total_length || d.expected_size)}</div>
-            <div class="download-meta">${d.last_error ? esc(d.last_error) : ""}</div>
+            <div>
+              <div class="download-name">${esc(d.relative_path)}</div>
+              <div class="download-meta">GID ${esc(d.aria2_gid || "—")} · ${esc(d.aria2_instance_id || "—")}</div>
+            </div>
+            <div>
+              ${statusBadge(d.status)}
+              <div class="download-meta">${fmtBytes(d.completed_length)} / ${fmtBytes(d.total_length || d.expected_size)}</div>
+            </div>
           </div>
-        `).join("") : '<div class="empty-block">尚未创建 aria2 下载记录</div>'}
+        `).join("") : '<div class="empty-state"><span>尚未创建 aria2 下载记录</span></div>'}
       </div>`;
   } catch (err) {
-    $("dialogBody").innerHTML = `<div class="empty-block">加载失败：${esc(err.message)}</div>`;
+    $("dialogBody").innerHTML = `<div class="empty-state"><strong>加载失败</strong><span>${esc(err.message)}</span></div>`;
   }
 }
 
-$("settingsBtn").addEventListener("click", async () => {
-  $("settingsBtn").disabled = true;
+function startDashboard() {
+  if (dashboardStarted) return;
+  dashboardStarted = true;
+  loadHealth();
+  loadTargets();
+  loadTasks();
+  setInterval(loadHealth, 15000);
+  setInterval(loadTargets, 60000);
+  setInterval(loadTasks, 3000);
+}
+
+async function bootstrap() {
   try {
-    const data = await request("/api/v1/config");
-    showSetup("settings", data);
-  } catch (err) {
-    toast("配置加载失败：" + err.message, true);
-  } finally {
-    $("settingsBtn").disabled = false;
+    const state = await request("/api/v1/setup");
+    appConfigured = Boolean(state.configured);
+  } catch (_) {
+    appConfigured = false;
   }
+  showHome();
+  startDashboard();
+}
+
+$("homeNav").addEventListener("click", showHome);
+document.querySelectorAll("[data-config-section]").forEach(button => {
+  button.addEventListener("click", () => openSettings(button.dataset.configSection || ""));
 });
 
-$("settingsCancelBtn").addEventListener("click", () => showDashboard());
+$("settingsCancelBtn").addEventListener("click", showHome);
 
-$("addAccountBtn").addEventListener("click", () => $("setupAccounts").appendChild(accountEntry()));
+$("addAccountBtn").addEventListener("click", () => {
+  $("setupAccounts").appendChild(accountEntry());
+});
 $("addAria2Btn").addEventListener("click", () => {
   $("setupAria2").appendChild(aria2Entry());
   refreshTargetAria2Options();
@@ -596,16 +602,15 @@ $("setupForm").addEventListener("submit", async (event) => {
   button.disabled = true;
   try {
     const payload = collectSetup();
-    const editing = configMode === "settings";
-    await request(editing ? "/api/v1/config" : "/api/v1/setup", {
-      method: editing ? "PUT" : "POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify(payload)
+    await request(appConfigured ? "/api/v1/config" : "/api/v1/setup", {
+      method: appConfigured ? "PUT" : "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
     });
-    toast(editing ? "配置已保存并热重载。" : "初始化完成，PikPak Bridge 已开始工作。");
-    showDashboard();
-    startDashboard();
-    await Promise.all([loadHealth(), loadTargets(), loadStatus()]);
+    appConfigured = true;
+    toast("配置已保存并生效。");
+    showHome();
+    await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
   } catch (err) {
     toast("保存失败：" + err.message, true);
   } finally {
@@ -615,25 +620,36 @@ $("setupForm").addEventListener("submit", async (event) => {
 
 $("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const input = $("sourceInput");
-  const source = input.value.trim();
+  const source = $("sourceInput").value.trim();
   const target = $("targetSelect").value;
-  if (!source) { toast("请先输入下载链接或磁链。", true); return; }
-  if (!target) { toast("请选择 Download Target。", true); return; }
+  if (!source) {
+    toast("请先输入下载链接或磁链。", true);
+    $("sourceInput").focus();
+    return;
+  }
+  if (!target) {
+    toast("请先添加一个下载目标。", true);
+    openSettings("targetSection");
+    return;
+  }
+
   const button = $("submitBtn");
   button.disabled = true;
   try {
     const task = await request("/api/v1/tasks", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({url:source, target})
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({url:source, target})
     });
-    input.value = "";
+    $("sourceInput").value = "";
     toast("任务已创建：" + task.id);
     await loadTasks();
   } catch (err) {
     if (err.status === 409 && err.body?.existing_task_id) {
-      toast("该资源在此 Target 已存在：" + err.body.existing_task_id, true);
+      toast("该资源已有任务：" + err.body.existing_task_id, true);
+    } else if (err.status === 503) {
+      toast("请先完成所需资源配置。", true);
+      openSettings("accountSection");
     } else {
       toast("创建失败：" + err.message, true);
     }
@@ -643,9 +659,9 @@ $("taskForm").addEventListener("submit", async (event) => {
 });
 
 $("refreshBtn").addEventListener("click", async () => {
-  $("refreshBtn").textContent = "…";
-  await Promise.all([loadHealth(), loadTasks(), loadStatus(), loadTargets()]);
-  $("refreshBtn").textContent = "↻";
+  $("refreshBtn").disabled = true;
+  await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
+  $("refreshBtn").disabled = false;
 });
 
 $("dialogClose").addEventListener("click", () => $("taskDialog").close());
