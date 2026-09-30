@@ -13,6 +13,7 @@ type AccountSnapshot struct {
 	QuotaRemaining int64
 	QuotaTotal     int64
 	StorageFree    int64
+	StorageTotal   int64
 	ActiveJobs     int
 	MaxJobs        int
 	LastUsedAt     time.Time
