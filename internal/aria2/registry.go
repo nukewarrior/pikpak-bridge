@@ -18,7 +18,6 @@ type InstanceSnapshot struct {
 	Healthy   bool
 	Active    int
 	Waiting   int
-	MaxActive int
 	Error     string
 }
 
@@ -33,7 +32,6 @@ type Backend interface {
 type registryInstance struct {
 	id        string
 	name      string
-	maxActive int
 	enabled   bool
 	client    *Client
 }
@@ -52,7 +50,6 @@ func NewRegistry(configs []config.Aria2Instance) *Registry {
 		instance := &registryInstance{
 			id:        cfg.ID,
 			name:      cfg.Name,
-			maxActive: cfg.MaxActive,
 			enabled:   config.Enabled(cfg.Enabled),
 			client:    New(cfg.URL, cfg.Secret),
 		}
@@ -90,7 +87,6 @@ func (r *Registry) Snapshot(ctx context.Context, instanceID string) (InstanceSna
 		ID:        instance.id,
 		Name:      instance.name,
 		Enabled:   instance.enabled,
-		MaxActive: instance.maxActive,
 	}
 	if !instance.enabled {
 		return snapshot, nil
