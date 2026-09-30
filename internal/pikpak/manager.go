@@ -12,7 +12,9 @@ import (
 )
 
 type managedAccount struct {
+	id      string
 	name    string
+	maxJobs int
 	enabled bool
 	client  *Client
 	mu      sync.Mutex
@@ -22,25 +24,21 @@ type Manager struct {
 	mu       sync.RWMutex
 	accounts map[string]*managedAccount
 	lastUsed map[string]time.Time
-	maxJobs  int
 }
 
-func NewManager(accounts []config.PikPakAccount, sessionDir string, maxJobs int) *Manager {
-	if maxJobs <= 0 {
-		maxJobs = 2
-	}
+func NewManager(accounts []config.PikPakAccount, sessionDir string) *Manager {
 	m := &Manager{
 		accounts: make(map[string]*managedAccount, len(accounts)),
 		lastUsed: make(map[string]time.Time, len(accounts)),
-		maxJobs:  maxJobs,
 	}
 	for _, account := range accounts {
-		enabled := account.Enabled == nil || *account.Enabled
-		enabled = enabled &&
+		enabled := config.Enabled(account.Enabled) &&
 			strings.TrimSpace(account.Username) != "" &&
 			strings.TrimSpace(account.Password) != ""
-		m.accounts[account.Name] = &managedAccount{
+		m.accounts[account.ID] = &managedAccount{
+			id:      account.ID,
 			name:    account.Name,
+			maxJobs: account.MaxJobs,
 			enabled: enabled,
 			client:  NewClient(account.Username, account.Password, sessionDir),
 		}
@@ -48,42 +46,38 @@ func NewManager(accounts []config.PikPakAccount, sessionDir string, maxJobs int)
 	return m
 }
 
-func (m *Manager) RefreshAccount(ctx context.Context, account string) (AccountSnapshot, error) {
-	entry, err := m.get(account)
+func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (AccountSnapshot, error) {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return AccountSnapshot{}, err
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+
+	base := AccountSnapshot{
+		ID:      entry.id,
+		Name:    entry.name,
+		Enabled: entry.enabled,
+		MaxJobs: entry.maxJobs,
+	}
 	if !entry.enabled {
-		return AccountSnapshot{Name: account, Enabled: false, State: "DISABLED"}, nil
+		base.State = "DISABLED"
+		return base, nil
 	}
 	if err := entry.client.Login(ctx); err != nil {
-		return AccountSnapshot{
-			Name:    account,
-			Enabled: true,
-			Healthy: false,
-			State:   stateForError(err),
-		}, err
+		base.State = stateForError(err)
+		return base, err
 	}
 
 	q, err := entry.client.Quota(ctx)
 	if err != nil {
-		return AccountSnapshot{
-			Name:    account,
-			Enabled: true,
-			Healthy: false,
-			State:   stateForError(err),
-		}, err
+		base.State = stateForError(err)
+		return base, err
 	}
 	tasks, err := entry.client.OfflineTasks(ctx)
 	if err != nil {
-		return AccountSnapshot{
-			Name:    account,
-			Enabled: true,
-			Healthy: false,
-			State:   stateForError(err),
-		}, err
+		base.State = stateForError(err)
+		return base, err
 	}
 
 	active := 0
@@ -107,7 +101,7 @@ func (m *Manager) RefreshAccount(ctx context.Context, account string) (AccountSn
 	}
 
 	m.mu.RLock()
-	lastUsed := m.lastUsed[account]
+	lastUsed := m.lastUsed[accountID]
 	m.mu.RUnlock()
 
 	state := "HEALTHY"
@@ -117,38 +111,30 @@ func (m *Manager) RefreshAccount(ctx context.Context, account string) (AccountSn
 		state = "STORAGE_FULL"
 	}
 
-	return AccountSnapshot{
-		Name:           account,
-		Enabled:        true,
-		Healthy:        true,
-		QuotaRemaining: quotaRemaining,
-		QuotaTotal:     quotaTotal,
-		StorageFree:    storageFree,
-		ActiveJobs:     active,
-		MaxJobs:        m.maxJobs,
-		LastUsedAt:     lastUsed,
-		State:          state,
-	}, nil
+	base.Healthy = true
+	base.QuotaRemaining = quotaRemaining
+	base.QuotaTotal = quotaTotal
+	base.StorageFree = storageFree
+	base.ActiveJobs = active
+	base.LastUsedAt = lastUsed
+	base.State = state
+	return base, nil
 }
 
-func (m *Manager) SubmitOffline(ctx context.Context, account, source string) (OfflineTask, error) {
-	entry, err := m.get(account)
+func (m *Manager) SubmitOffline(ctx context.Context, accountID, source string) (OfflineTask, error) {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return OfflineTask{}, err
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if !entry.enabled {
-		return OfflineTask{}, fmt.Errorf("pikpak account %q is disabled", account)
+		return OfflineTask{}, fmt.Errorf("pikpak account %q is disabled", accountID)
 	}
 	if err := entry.client.Login(ctx); err != nil {
 		return OfflineTask{}, err
 	}
 
-	// A bridge process can crash after PikPak accepted the request but before
-	// the remote task ID was persisted. Re-check existing tasks by the exact
-	// submitted source before creating a new one so restart recovery does not
-	// consume another offline-download quota slot.
 	tasks, err := entry.client.OfflineTasks(ctx)
 	if err != nil {
 		return OfflineTask{}, fmt.Errorf("check existing offline tasks before submit: %w", err)
@@ -164,7 +150,7 @@ func (m *Manager) SubmitOffline(ctx context.Context, account, source string) (Of
 		return OfflineTask{}, err
 	}
 	m.mu.Lock()
-	m.lastUsed[account] = time.Now().UTC()
+	m.lastUsed[accountID] = time.Now().UTC()
 	m.mu.Unlock()
 	return mapOfflineTask(task), nil
 }
@@ -179,8 +165,8 @@ func findOfflineTaskBySource(tasks []offlineTaskAPI, source string) (offlineTask
 	return offlineTaskAPI{}, false
 }
 
-func (m *Manager) GetOfflineTask(ctx context.Context, account, taskID string) (OfflineTask, error) {
-	entry, err := m.get(account)
+func (m *Manager) GetOfflineTask(ctx context.Context, accountID, taskID string) (OfflineTask, error) {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return OfflineTask{}, err
 	}
@@ -201,8 +187,8 @@ func (m *Manager) GetOfflineTask(ctx context.Context, account, taskID string) (O
 	return OfflineTask{}, fmt.Errorf("pikpak offline task %q not found", taskID)
 }
 
-func (m *Manager) ListFiles(ctx context.Context, account, rootFileID string) ([]RemoteFile, error) {
-	entry, err := m.get(account)
+func (m *Manager) ListFiles(ctx context.Context, accountID, rootFileID string) ([]RemoteFile, error) {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +247,8 @@ func (m *Manager) walkFiles(ctx context.Context, client *Client, parentID, prefi
 	return nil
 }
 
-func (m *Manager) GetDownloadURL(ctx context.Context, account, fileID string) (string, error) {
-	entry, err := m.get(account)
+func (m *Manager) GetDownloadURL(ctx context.Context, accountID, fileID string) (string, error) {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return "", err
 	}
@@ -274,8 +260,8 @@ func (m *Manager) GetDownloadURL(ctx context.Context, account, fileID string) (s
 	return entry.client.DownloadURL(ctx, fileID)
 }
 
-func (m *Manager) DeletePermanently(ctx context.Context, account, fileID string) error {
-	entry, err := m.get(account)
+func (m *Manager) DeletePermanently(ctx context.Context, accountID, fileID string) error {
+	entry, err := m.get(accountID)
 	if err != nil {
 		return err
 	}
@@ -288,9 +274,6 @@ func (m *Manager) DeletePermanently(ctx context.Context, account, fileID string)
 		return err
 	}
 	if err := entry.client.DeletePermanently(ctx, fileID); err != nil {
-		// Cleanup is deliberately idempotent. If a previous delete succeeded
-		// remotely but the bridge crashed before persisting COMPLETED, a retry
-		// may observe that the exact recorded root ID is already gone.
 		if KindOf(err) == ErrorKindNotFound {
 			return nil
 		}
@@ -299,12 +282,12 @@ func (m *Manager) DeletePermanently(ctx context.Context, account, fileID string)
 	return nil
 }
 
-func (m *Manager) get(name string) (*managedAccount, error) {
+func (m *Manager) get(id string) (*managedAccount, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	entry, ok := m.accounts[name]
+	entry, ok := m.accounts[id]
 	if !ok {
-		return nil, fmt.Errorf("pikpak account %q not configured", name)
+		return nil, fmt.Errorf("pikpak account %q not configured", id)
 	}
 	return entry, nil
 }
