@@ -18,12 +18,16 @@ type fakeAria2 struct {
 
 func (f *fakeAria2) Snapshots(context.Context) []aria2.InstanceSnapshot {
 	return []aria2.InstanceSnapshot{{
-		Name: "a1", Enabled: true, Healthy: true, MaxActive: 4, Weight: 1,
+		ID: "a1", Name: "aria2", Enabled: true, Healthy: true, MaxActive: 4,
 	}}
 }
-
-func (f *fakeAria2) Add(_ context.Context, instance, uri, gid, relativePath string) (string, error) {
-	if uri == "" || instance != "a1" || relativePath == "" {
+func (f *fakeAria2) Snapshot(context.Context, string) (aria2.InstanceSnapshot, error) {
+	return aria2.InstanceSnapshot{
+		ID: "a1", Name: "aria2", Enabled: true, Healthy: true, MaxActive: 4,
+	}, nil
+}
+func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+	if uri == "" || instanceID != "a1" || baseDir != "/downloads/movies" || relativePath == "" {
 		return "", errors.New("bad add args")
 	}
 	if f.added == nil {
@@ -32,8 +36,10 @@ func (f *fakeAria2) Add(_ context.Context, instance, uri, gid, relativePath stri
 	f.added[gid] = true
 	return gid, nil
 }
-
-func (f *fakeAria2) TellStatus(_ context.Context, instance, gid string) (aria2.Status, error) {
+func (f *fakeAria2) TellStatus(_ context.Context, instanceID, gid string) (aria2.Status, error) {
+	if instanceID != "a1" {
+		return aria2.Status{}, errors.New("wrong instance")
+	}
 	if f.added != nil && f.added[gid] {
 		return aria2.Status{
 			GID: gid, Status: "complete", TotalLength: "1234", CompletedLength: "1234",
@@ -41,7 +47,6 @@ func (f *fakeAria2) TellStatus(_ context.Context, instance, gid string) (aria2.S
 	}
 	return aria2.Status{}, errors.New("not found")
 }
-
 func (f *fakeAria2) Forget(context.Context, string, string) error { return nil }
 
 type fakeURLProvider struct{}
@@ -72,10 +77,18 @@ func TestAria2WorkerAdvancesToVerifying(t *testing.T) {
 
 	now := time.Now().UTC()
 	task := domain.Task{
-		ID: "task-a", Source: "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
-		SourceType: "magnet", SourceKey: "btih:0123456789ABCDEF0123456789ABCDEF01234567",
-		Status: domain.TaskWaitingAria2, PikPakAccount: "pp1",
-		CreatedAt: now, UpdatedAt: now,
+		ID:              "task-a",
+		Source:          "magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+		SourceType:      "magnet",
+		SourceKey:       "btih:0123456789ABCDEF0123456789ABCDEF01234567",
+		TargetID:        "movies",
+		TargetName:      "电影",
+		Aria2InstanceID: "a1",
+		DownloadDir:     "/downloads/movies",
+		Status:          domain.TaskWaitingAria2,
+		PikPakAccountID: "pp1",
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := db.CreateTask(context.Background(), task); err != nil {
 		t.Fatal(err)
@@ -85,7 +98,7 @@ func TestAria2WorkerAdvancesToVerifying(t *testing.T) {
 		t.Fatal(err)
 	}
 	task.Status = domain.TaskWaitingAria2
-	task.PikPakAccount = "pp1"
+	task.PikPakAccountID = "pp1"
 	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -99,8 +112,8 @@ func TestAria2WorkerAdvancesToVerifying(t *testing.T) {
 	backend := &fakeAria2{}
 	w := NewAria2(db, fakeURLProvider{}, backend, Aria2Options{
 		StatusInterval: time.Millisecond,
-		RetryInterval: time.Millisecond,
-		MaxRetry: 3,
+		RetryInterval:  time.Millisecond,
+		MaxRetry:       3,
 	})
 	if err := w.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
@@ -123,6 +136,9 @@ func TestAria2WorkerAdvancesToVerifying(t *testing.T) {
 	}
 	if len(downloads) != 1 || downloads[0].Status != domain.DownloadComplete {
 		t.Fatalf("unexpected downloads: %#v", downloads)
+	}
+	if downloads[0].Aria2InstanceID != "a1" {
+		t.Fatalf("want a1, got %s", downloads[0].Aria2InstanceID)
 	}
 	if downloads[0].CompletedLength != 1234 {
 		t.Fatalf("want completed length 1234, got %d", downloads[0].CompletedLength)
