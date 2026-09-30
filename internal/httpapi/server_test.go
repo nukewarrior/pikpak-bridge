@@ -141,7 +141,7 @@ func TestTaskCreationBlockedBeforeSetup(t *testing.T) {
 	}
 }
 
-func TestTaskCreationSnapshotsTargetAndDedupesPerTarget(t *testing.T) {
+func TestTaskCreationSnapshotsTargetAndDedupesSource(t *testing.T) {
 	db, err := store.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +182,7 @@ func TestTaskCreationSnapshotsTargetAndDedupesPerTarget(t *testing.T) {
 	}
 
 	otherTarget := create("temp")
-	if otherTarget.Code != http.StatusCreated {
-		t.Fatalf("different target: want 201, got %d: %s", otherTarget.Code, otherTarget.Body.String())
+	if otherTarget.Code != http.StatusConflict {
+		t.Fatalf("different target: same source must remain 409, got %d: %s", otherTarget.Code, otherTarget.Body.String())
 	}
 }
