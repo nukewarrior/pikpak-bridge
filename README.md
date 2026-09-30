@@ -156,14 +156,20 @@ In GitHub Actions, open **Docker → Run workflow**, select the development bran
 pr-12
 ~~~
 
-Then deploy that image with the same Compose file:
+Then deploy that image with the same Compose file. Image, host port and data directory are overrideable, so a development build can run beside the stable instance without touching its database or configuration:
 
 ~~~bash
-PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12 docker compose pull
-PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12 docker compose up -d
+export PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12
+export PIKPAK_BRIDGE_PORT=8081
+export PIKPAK_BRIDGE_DATA=./data-pr12
+
+docker compose -p pikpak-bridge-pr12 pull
+docker compose -p pikpak-bridge-pr12 up -d
 ~~~
 
-Only a push to `master` is allowed to publish `latest`. A manual development build always publishes its explicit tag (when supplied) plus the commit `sha-xxxxxxx` tag.
+Open `http://<host>:8081/` and initialize the development instance independently.
+
+Only a push to `master` is allowed to publish `latest`. A manual development build always publishes its explicit tag (when supplied) plus the commit `sha-xxxxxxx` tag. The fixed Compose `container_name` is intentionally omitted so multiple project names can coexist.
 
 ## API
 
