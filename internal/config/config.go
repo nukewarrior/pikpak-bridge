@@ -183,16 +183,6 @@ func Validate(cfg *Config) error {
 	if cfg.Cleanup.Enabled && !cfg.Cleanup.Permanent {
 		return errors.New("cleanup.enabled requires cleanup.permanent=true")
 	}
-	if len(cfg.PikPak.Accounts) == 0 {
-		return errors.New("at least one PikPak account is required")
-	}
-	if len(cfg.Aria2.Instances) == 0 {
-		return errors.New("at least one aria2 instance is required")
-	}
-	if len(cfg.Targets) == 0 {
-		return errors.New("at least one download target is required")
-	}
-
 	accountIDs := make(map[string]struct{}, len(cfg.PikPak.Accounts))
 	for i, account := range cfg.PikPak.Accounts {
 		if strings.TrimSpace(account.ID) == "" || strings.TrimSpace(account.Name) == "" {
@@ -251,9 +241,6 @@ func Validate(cfg *Config) error {
 		} else if target.Default {
 			return fmt.Errorf("disabled target %q cannot be default", target.ID)
 		}
-	}
-	if enabledTargets == 0 {
-		return errors.New("at least one download target must be enabled")
 	}
 	if defaults > 1 {
 		return errors.New("only one download target may be default")
