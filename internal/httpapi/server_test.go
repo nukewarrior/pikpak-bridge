@@ -330,8 +330,9 @@ func TestTaskCreationSnapshotsTargetAndDedupesSource(t *testing.T) {
 		t.Fatalf("movies: want 201, got %d: %s", first.Code, first.Body.String())
 	}
 	if !strings.Contains(first.Body.String(), `"target_id":"movies"`) ||
-		!strings.Contains(first.Body.String(), `"download_dir":"/media/movies"`) {
-		t.Fatalf("task did not snapshot target: %s", first.Body.String())
+		!strings.Contains(first.Body.String(), `"download_dir":"/media/movies"`) ||
+		!strings.Contains(first.Body.String(), `"name":"Magnet 下载任务"`) {
+		t.Fatalf("task did not snapshot target/name: %s", first.Body.String())
 	}
 
 	if got := create("movies"); got.Code != http.StatusConflict {
