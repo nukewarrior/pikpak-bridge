@@ -81,7 +81,7 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 }
 
 func (w *Worker) Run(ctx context.Context) {
-	slog.Info("pikpak worker started",
+	slog.Info("PikPak 工作者已启动",
 		"accounts", len(w.options.AccountIDs),
 		"worker_interval", w.options.WorkerInterval,
 		"quota_refresh", w.options.QuotaRefresh,
@@ -89,7 +89,7 @@ func (w *Worker) Run(ctx context.Context) {
 		"retry_interval", w.options.RetryInterval,
 		"min_free_space", w.options.MinFreeSpace,
 	)
-	defer slog.Info("pikpak worker stopped")
+	defer slog.Info("PikPak 工作者已停止")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -106,7 +106,7 @@ func (w *Worker) Run(ctx context.Context) {
 
 func (w *Worker) runOnceLogged(ctx context.Context) {
 	if err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("pikpak worker iteration failed", "error", err)
+		slog.Error("PikPak 工作循环执行失败", "error", err)
 	}
 }
 
@@ -120,7 +120,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 			return err
 		}
 		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("pikpak task processing failed", "task_id", tasks[i].ID, "error", err)
+			slog.Warn("PikPak 任务处理失败", "task_id", tasks[i].ID, "error", err)
 		}
 	}
 	return nil
@@ -146,7 +146,7 @@ func (w *Worker) processTask(ctx context.Context, task *domain.Task) error {
 func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	now := time.Now().UTC()
 	if len(w.options.AccountIDs) == 0 {
-		slog.Warn("pikpak task waiting: no accounts configured", "task_id", task.ID)
+		slog.Warn("PikPak 任务等待：未配置账号", "task_id", task.ID)
 		task.Status = domain.TaskWaitingPikPakAccount
 		task.Error = "no PikPak account configured"
 		task.NextAttemptAt = timePtr(now.Add(w.options.RetryInterval))
@@ -163,7 +163,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 				snapshot.CooldownUntil = runtime.cooldown
 				snapshot.ActiveJobs += runtime.reserved
 				snapshots = append(snapshots, snapshot)
-				slog.Warn("pikpak account skipped during cooldown",
+				slog.Warn("跳过处于冷却期的 PikPak 账号",
 					"task_id", task.ID,
 					"account_id", id,
 					"account_name", snapshot.Name,
@@ -171,7 +171,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 					"failures", runtime.failures,
 				)
 			} else {
-				slog.Warn("pikpak account skipped during cooldown",
+				slog.Warn("跳过处于冷却期的 PikPak 账号",
 					"task_id", task.ID,
 					"account_id", id,
 					"cooldown_until", runtime.cooldown,
@@ -193,7 +193,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		if err != nil {
 			w.noteAccountFailure(id, snapshot, err, now)
 			failed := w.runtime(id)
-			slog.Warn("pikpak account refresh failed",
+			slog.Warn("PikPak 账号状态刷新失败",
 				"task_id", task.ID,
 				"account_id", id,
 				"account_name", snapshot.Name,
@@ -207,7 +207,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		w.noteAccountSuccess(id, snapshot, now)
 		snapshot.ActiveJobs += runtime.reserved
 		snapshots = append(snapshots, snapshot)
-		slog.Info("pikpak account refreshed",
+		slog.Info("PikPak 账号状态已刷新",
 			"account_id", snapshot.ID,
 			"account_name", snapshot.Name,
 			"enabled", snapshot.Enabled,
@@ -223,7 +223,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 
 	selected, err := scheduler.SelectPikPakAccount(snapshots, w.options.MinFreeSpace, now)
 	if err != nil {
-		slog.Warn("pikpak task waiting: no eligible account",
+		slog.Warn("PikPak 任务等待：没有可用账号",
 			"task_id", task.ID,
 			"configured_accounts", len(w.options.AccountIDs),
 			"snapshots", len(snapshots),
@@ -232,7 +232,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		)
 		for _, snapshot := range snapshots {
 			reasons := accountEligibilityReasons(snapshot, w.options.MinFreeSpace, now)
-			slog.Warn("pikpak account ineligible",
+			slog.Warn("PikPak 账号不可用",
 				"task_id", task.ID,
 				"account_id", snapshot.ID,
 				"account_name", snapshot.Name,
@@ -255,7 +255,7 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
 	}
 
-	slog.Info("pikpak account selected",
+	slog.Info("已选择 PikPak 账号",
 		"task_id", task.ID,
 		"account_id", selected.ID,
 		"account_name", selected.Name,
@@ -293,7 +293,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 		defer w.releaseReservation(task.PikPakAccountID)
 	}
 
-	slog.Info("pikpak offline submit started",
+	slog.Info("开始提交 PikPak 离线下载",
 		"task_id", task.ID,
 		"account_id", task.PikPakAccountID,
 		"source_type", task.SourceType,
@@ -301,7 +301,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 	remote, err := w.provider.SubmitOffline(ctx, task.PikPakAccountID, task.Source)
 	if err != nil {
 		w.noteSubmitError(task.PikPakAccountID, err)
-		slog.Warn("pikpak offline submit failed",
+		slog.Warn("PikPak 离线下载提交失败",
 			"task_id", task.ID,
 			"account_id", task.PikPakAccountID,
 			"error", err,
@@ -327,7 +327,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 	}
 
 	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
-	slog.Info("pikpak offline submit accepted",
+	slog.Info("PikPak 离线下载提交成功",
 		"task_id", task.ID,
 		"account_id", task.PikPakAccountID,
 		"pikpak_task_id", remote.ID,
@@ -381,7 +381,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 
 	switch remote.Status {
 	case pikpak.PhaseComplete:
-		slog.Info("pikpak offline task complete",
+		slog.Info("PikPak 离线下载已完成",
 			"task_id", task.ID,
 			"account_id", task.PikPakAccountID,
 			"pikpak_task_id", task.PikPakTaskID,
@@ -396,7 +396,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			task.NextAttemptAt = nil
 		}
 	case pikpak.PhaseError:
-		slog.Warn("pikpak offline task failed",
+		slog.Warn("PikPak 离线下载失败",
 			"task_id", task.ID,
 			"account_id", task.PikPakAccountID,
 			"pikpak_task_id", task.PikPakTaskID,
@@ -458,7 +458,7 @@ func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
 
-	slog.Info("pikpak files resolved",
+	slog.Info("PikPak 文件解析完成",
 		"task_id", task.ID,
 		"account_id", task.PikPakAccountID,
 		"root_file_id", task.PikPakRootFileID,
@@ -572,27 +572,27 @@ func (w *Worker) invalidateAccount(id string) {
 func accountEligibilityReasons(account pikpak.AccountSnapshot, requiredBytes int64, now time.Time) []string {
 	reasons := make([]string, 0, 6)
 	if !account.Enabled {
-		reasons = append(reasons, "disabled")
+		reasons = append(reasons, "已禁用")
 	}
 	if !account.Healthy {
-		reasons = append(reasons, "unhealthy")
+		reasons = append(reasons, "状态异常")
 	}
 	if account.QuotaRemaining <= 0 {
-		reasons = append(reasons, "quota_exhausted")
+		reasons = append(reasons, "云下载额度已用尽")
 	}
 	if !account.CooldownUntil.IsZero() && now.Before(account.CooldownUntil) {
-		reasons = append(reasons, "cooldown")
+		reasons = append(reasons, "冷却中")
 	}
 	if account.MaxJobs <= 0 {
-		reasons = append(reasons, "max_jobs_invalid")
+		reasons = append(reasons, "最大并发配置无效")
 	} else if account.ActiveJobs >= account.MaxJobs {
-		reasons = append(reasons, "at_capacity")
+		reasons = append(reasons, "已达到并发上限")
 	}
 	if requiredBytes > 0 && account.StorageFree < requiredBytes {
-		reasons = append(reasons, "insufficient_storage")
+		reasons = append(reasons, "剩余空间不足")
 	}
 	if len(reasons) == 0 {
-		reasons = append(reasons, "unknown")
+		reasons = append(reasons, "未知原因")
 	}
 	return reasons
 }
