@@ -181,7 +181,7 @@ func (m *Manager) CancelOfflineTask(ctx context.Context, accountID, taskID strin
 	if err := entry.client.Login(ctx); err != nil {
 		return err
 	}
-	if err := entry.client.DeleteOfflineTask(ctx, taskID, false); err != nil {
+	if err := entry.client.DeleteOfflineTask(ctx, taskID, true); err != nil {
 		if KindOf(err) == ErrorKindNotFound {
 			return nil
 		}
