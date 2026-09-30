@@ -10,33 +10,48 @@ pikpak:
   quota_refresh: 5m
   status_interval: 10s
   min_free_space: 2GB
-  max_jobs_per_account: 2
   accounts:
-    - name: pp01
+    - id: pp01
+      name: PikPak 01
       username: ${PIKPAK_PP01_USERNAME}
       password: ${PIKPAK_PP01_PASSWORD}
-    - name: pp02
+      max_jobs: 2
+    - id: pp02
+      name: PikPak 02
       username: ${PIKPAK_PP02_USERNAME}
       password: ${PIKPAK_PP02_PASSWORD}
+      max_jobs: 2
 
 aria2:
   status_interval: 5s
   instances:
-    - name: unraid
+    - id: unraid
+      name: Unraid
       url: http://192.168.1.10:6800/jsonrpc
       secret: ${ARIA2_UNRAID_SECRET}
-      dir: /downloads/pikpak
       max_active: 4
-      weight: 10
-    - name: backup
+    - id: backup
+      name: Backup
       url: http://192.168.1.20:6800/jsonrpc
       secret: ${ARIA2_BACKUP_SECRET}
-      dir: /downloads/pikpak
       max_active: 2
-      weight: 5
+
+targets:
+  - id: movies
+    name: 电影
+    aria2_instance: unraid
+    dir: /downloads/movies
+    default: true
+  - id: tv
+    name: 电视剧
+    aria2_instance: unraid
+    dir: /downloads/tv
+  - id: temp
+    name: 临时下载
+    aria2_instance: backup
+    dir: /downloads/temp
 
 scheduler:
-  aria2_affinity: task
   worker_interval: 2s
   retry_interval: 30s
   max_retry: 10
