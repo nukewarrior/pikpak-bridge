@@ -194,7 +194,7 @@ func (m *Manager) ListFiles(ctx context.Context, accountID, rootFileID string) (
 	}
 
 	var out []RemoteFile
-	if err := m.walkFiles(ctx, entry.client, root.ID, "", &out); err != nil {
+	if err := m.walkFiles(ctx, entry.client, root.ID, root.Name, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
