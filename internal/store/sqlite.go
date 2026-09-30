@@ -619,3 +619,52 @@ func boolInt(value bool) int {
 	}
 	return 0
 }
+
+
+func (s *SQLite) ActiveResourceReferences(ctx context.Context) ([]string, []string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT pikpak_account_id, aria2_instance_id
+		FROM tasks
+		WHERE status NOT IN (?, ?, ?, ?, ?, ?, ?)
+	`,
+		string(domain.TaskCompleted),
+		string(domain.TaskCancelled),
+		string(domain.TaskPikPakFailed),
+		string(domain.TaskAria2Failed),
+		string(domain.TaskVerifyFailed),
+		string(domain.TaskCleanupFailed),
+		"",
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	accountSet := map[string]struct{}{}
+	aria2Set := map[string]struct{}{}
+	for rows.Next() {
+		var accountID, aria2ID string
+		if err := rows.Scan(&accountID, &aria2ID); err != nil {
+			return nil, nil, err
+		}
+		if accountID != "" {
+			accountSet[accountID] = struct{}{}
+		}
+		if aria2ID != "" {
+			aria2Set[aria2ID] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	accounts := make([]string, 0, len(accountSet))
+	for id := range accountSet {
+		accounts = append(accounts, id)
+	}
+	instances := make([]string, 0, len(aria2Set))
+	for id := range aria2Set {
+		instances = append(instances, id)
+	}
+	return accounts, instances, nil
+}
