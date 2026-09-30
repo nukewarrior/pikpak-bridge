@@ -115,6 +115,7 @@ func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (Account
 	base.QuotaRemaining = quotaRemaining
 	base.QuotaTotal = quotaTotal
 	base.StorageFree = storageFree
+	base.StorageTotal = storageTotal
 	base.ActiveJobs = active
 	base.LastUsedAt = lastUsed
 	base.State = state
