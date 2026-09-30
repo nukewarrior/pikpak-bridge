@@ -42,6 +42,7 @@ let toastTimer;
 let accountSeq = 0;
 let aria2Seq = 0;
 let targetSeq = 0;
+let configMode = "setup";
 
 function esc(value) {
   return String(value ?? "")
@@ -128,9 +129,13 @@ function accountEntry(values={}) {
         <label>最大并发离线任务</label>
         <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(values.max_jobs || 2)}" required>
       </div>
+      <div class="field">
+        <label>状态</label>
+        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此账号</label>
+      </div>
       <div class="field wide">
         <label>密码</label>
-        <input data-field="password" type="password" autocomplete="new-password" placeholder="PikPak 登录密码" required>
+        <input data-field="password" type="password" autocomplete="new-password" placeholder="${values.password_set ? "已保存，留空保持不变" : "PikPak 登录密码"}" ${values.password_set ? "" : "required"}>
       </div>
     </div>`;
   div.querySelector(".remove-btn").addEventListener("click", () => {
@@ -170,7 +175,11 @@ function aria2Entry(values={}) {
       </div>
       <div class="field">
         <label>RPC Secret</label>
-        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="未设置可留空">
+        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="${values.secret_set ? "已保存，留空保持不变" : "未设置可留空"}">
+      </div>
+      <div class="field">
+        <label>状态</label>
+        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此实例</label>
       </div>
     </div>`;
   div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
@@ -214,6 +223,10 @@ function targetEntry(values={}) {
       <div class="field">
         <label>默认目标</label>
         <label class="checkbox-row"><input data-field="default" type="checkbox" ${values.default || index === 1 ? "checked" : ""}> 未指定 Target 时使用</label>
+      </div>
+      <div class="field">
+        <label>状态</label>
+        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此目标</label>
       </div>
       <div class="field wide">
         <label>下载目录</label>
@@ -266,12 +279,37 @@ function refreshTargetAria2Options() {
   });
 }
 
-function showSetup() {
+function resetConfigForm() {
+  $("setupAccounts").innerHTML = "";
+  $("setupAria2").innerHTML = "";
+  $("setupTargets").innerHTML = "";
+  accountSeq = 0;
+  aria2Seq = 0;
+  targetSeq = 0;
+}
+
+function showSetup(mode="setup", data=null) {
+  configMode = mode;
+  resetConfigForm();
   $("dashboard").classList.add("hidden");
   $("setupScreen").classList.remove("hidden");
-  if (!$("setupAccounts").children.length) $("setupAccounts").appendChild(accountEntry());
-  if (!$("setupAria2").children.length) $("setupAria2").appendChild(aria2Entry({id:"unraid", name:"Unraid"}));
-  if (!$("setupTargets").children.length) {
+
+  const editing = mode === "settings";
+  $("setupEyebrow").textContent = editing ? "SETTINGS" : "FIRST RUN";
+  $("setupTitle").textContent = editing ? "配置 PikPak Bridge" : "设置 PikPak Bridge";
+  $("setupDescription").textContent = editing
+    ? "修改账号池、aria2 实例和 Download Target；保存后服务会热重载。"
+    : "账号池负责自动选择离线账号，Download Target 决定最终下载位置。";
+  $("setupSubmitLabel").textContent = editing ? "保存并热重载" : "保存并开始使用";
+  $("settingsCancelBtn").classList.toggle("hidden", !editing);
+
+  if (editing && data) {
+    (data.pikpak_accounts || []).forEach(item => $("setupAccounts").appendChild(accountEntry(item)));
+    (data.aria2_instances || []).forEach(item => $("setupAria2").appendChild(aria2Entry(item)));
+    (data.targets || []).forEach(item => $("setupTargets").appendChild(targetEntry(item)));
+  } else {
+    $("setupAccounts").appendChild(accountEntry());
+    $("setupAria2").appendChild(aria2Entry({id:"unraid", name:"Unraid"}));
     $("setupTargets").appendChild(targetEntry({
       id:"default", name:"默认下载", aria2_instance:"unraid", dir:"/downloads/pikpak", default:true
     }));
@@ -290,20 +328,23 @@ function collectSetup() {
     name: row.querySelector('[data-field="name"]').value.trim(),
     username: row.querySelector('[data-field="username"]').value.trim(),
     password: row.querySelector('[data-field="password"]').value,
-    max_jobs: Number(row.querySelector('[data-field="max_jobs"]').value)
+    max_jobs: Number(row.querySelector('[data-field="max_jobs"]').value),
+    enabled: row.querySelector('[data-field="enabled"]').checked
   }));
   const instances = [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
     id: row.querySelector('[data-field="id"]').value.trim(),
     name: row.querySelector('[data-field="name"]').value.trim(),
     url: row.querySelector('[data-field="url"]').value.trim(),
-    secret: row.querySelector('[data-field="secret"]').value
+    secret: row.querySelector('[data-field="secret"]').value,
+    enabled: row.querySelector('[data-field="enabled"]').checked
   }));
   const targets = [...$("setupTargets").querySelectorAll(".setup-entry")].map(row => ({
     id: row.querySelector('[data-field="id"]').value.trim(),
     name: row.querySelector('[data-field="name"]').value.trim(),
     aria2_instance: row.querySelector('[data-field="aria2_instance"]').value,
     dir: row.querySelector('[data-field="dir"]').value.trim(),
-    default: row.querySelector('[data-field="default"]').checked
+    default: row.querySelector('[data-field="default"]').checked,
+    enabled: row.querySelector('[data-field="enabled"]').checked
   }));
   return {pikpak_accounts: accounts, aria2_instances: instances, targets};
 }
@@ -525,6 +566,20 @@ async function openTask(id) {
   }
 }
 
+$("settingsBtn").addEventListener("click", async () => {
+  $("settingsBtn").disabled = true;
+  try {
+    const data = await request("/api/v1/config");
+    showSetup("settings", data);
+  } catch (err) {
+    toast("配置加载失败：" + err.message, true);
+  } finally {
+    $("settingsBtn").disabled = false;
+  }
+});
+
+$("settingsCancelBtn").addEventListener("click", () => showDashboard());
+
 $("addAccountBtn").addEventListener("click", () => $("setupAccounts").appendChild(accountEntry()));
 $("addAria2Btn").addEventListener("click", () => {
   $("setupAria2").appendChild(aria2Entry());
@@ -541,14 +596,16 @@ $("setupForm").addEventListener("submit", async (event) => {
   button.disabled = true;
   try {
     const payload = collectSetup();
-    await request("/api/v1/setup", {
-      method:"POST",
+    const editing = configMode === "settings";
+    await request(editing ? "/api/v1/config" : "/api/v1/setup", {
+      method: editing ? "PUT" : "POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify(payload)
     });
-    toast("初始化完成，PikPak Bridge 已开始工作。");
+    toast(editing ? "配置已保存并热重载。" : "初始化完成，PikPak Bridge 已开始工作。");
     showDashboard();
     startDashboard();
+    await Promise.all([loadHealth(), loadTargets(), loadStatus()]);
   } catch (err) {
     toast("保存失败：" + err.message, true);
   } finally {
