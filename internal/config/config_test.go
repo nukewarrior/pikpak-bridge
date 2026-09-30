@@ -88,3 +88,26 @@ func TestValidateRejectsEnabledTargetOnDisabledInstance(t *testing.T) {
 		t.Fatal("expected disabled aria2 instance validation error")
 	}
 }
+
+
+func TestValidateAllowsEmptyAndPartialResources(t *testing.T) {
+	if err := Validate(Default()); err != nil {
+		t.Fatalf("empty resources should be valid: %v", err)
+	}
+
+	onlyPikPak := Default()
+	onlyPikPak.PikPak.Accounts = []PikPakAccount{{
+		ID: "pp01", Name: "主账号", Username: "user", Password: "secret", MaxJobs: 2,
+	}}
+	if err := Validate(onlyPikPak); err != nil {
+		t.Fatalf("PikPak-only config should be valid: %v", err)
+	}
+
+	onlyAria2 := Default()
+	onlyAria2.Aria2.Instances = []Aria2Instance{{
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc",
+	}}
+	if err := Validate(onlyAria2); err != nil {
+		t.Fatalf("aria2-only config should be valid: %v", err)
+	}
+}
