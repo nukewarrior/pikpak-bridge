@@ -216,27 +216,31 @@ function accountEntry(values={}) {
       <strong>PikPak 账号 #${index}</strong>
       <button class="remove-btn" type="button">移除</button>
     </div>
-    <div class="setup-grid">
+    <div class="resource-form account-form">
       <input data-field="id" type="hidden" value="${esc(id)}">
-      <div class="field">
+
+      <div class="field field-name">
         <label>名称</label>
         <input data-field="name" value="${esc(values.name || ("PikPak 账号 " + index))}" required>
       </div>
-      <div class="field">
+      <div class="field field-enabled">
+        <label>状态</label>
+        <label class="switch-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}><span>启用此账号</span></label>
+      </div>
+
+      <div class="field field-username">
         <label>账号</label>
         <input data-field="username" value="${esc(values.username || "")}" autocomplete="username" placeholder="邮箱或手机号" required>
       </div>
-      <div class="field">
-        <label>最大并发离线任务</label>
-        <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(values.max_jobs || 2)}" required>
-      </div>
-      <div class="field">
-        <label>状态</label>
-        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此账号</label>
-      </div>
-      <div class="field wide">
+      <div class="field field-password">
         <label>密码</label>
         <input data-field="password" type="password" autocomplete="new-password" placeholder="${values.password_set ? "已保存，留空保持不变" : "PikPak 登录密码"}" ${values.password_set ? "" : "required"}>
+      </div>
+
+      <div class="field field-jobs">
+        <label>最大并发离线任务</label>
+        <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(values.max_jobs || 2)}" required>
+        <span class="hint">限制此账号同时处理的 PikPak 离线任务数量。</span>
       </div>
     </div>`;
   div.querySelector(".remove-btn").addEventListener("click", () => div.remove());
@@ -255,23 +259,25 @@ function aria2Entry(values={}) {
       <strong>aria2 实例 #${index}</strong>
       <button class="remove-btn" type="button">移除</button>
     </div>
-    <div class="setup-grid">
+    <div class="resource-form aria2-form">
       <input data-field="id" type="hidden" value="${esc(id)}">
-      <div class="field">
+
+      <div class="field field-name">
         <label>名称</label>
         <input data-field="name" value="${esc(values.name || ("aria2 实例 " + index))}" required>
       </div>
-      <div class="field wide">
+      <div class="field field-enabled">
+        <label>状态</label>
+        <label class="switch-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}><span>启用此实例</span></label>
+      </div>
+
+      <div class="field field-rpc">
         <label>JSON-RPC 地址</label>
         <input data-field="url" value="${esc(values.url || "")}" placeholder="http://192.168.1.10:6800/jsonrpc" required>
       </div>
-      <div class="field">
+      <div class="field field-secret">
         <label>RPC Secret</label>
         <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="${values.secret_set ? "已保存，留空保持不变" : "未设置可留空"}">
-      </div>
-      <div class="field">
-        <label>状态</label>
-        <label class="checkbox-row"><input data-field="enabled" type="checkbox" ${values.enabled === false ? "" : "checked"}> 启用此实例</label>
       </div>
     </div>`;
   div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
