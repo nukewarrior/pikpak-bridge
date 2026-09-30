@@ -45,7 +45,7 @@ func prepareVerifiedTask(t *testing.T, expected, total, completed int64) (*store
 	now := time.Now().UTC()
 	task := domain.Task{
 		ID: "verify-task", Source: "https://example.invalid/source", SourceType: "https",
-		SourceKey: "url:test", Status: domain.TaskQueued,
+		SourceKey: "url:test", TargetID: "default", TargetName: "默认", Aria2InstanceID: "a1", DownloadDir: "/downloads", Status: domain.TaskQueued,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := db.CreateTask(context.Background(), task); err != nil {
@@ -56,7 +56,7 @@ func prepareVerifiedTask(t *testing.T, expected, total, completed int64) (*store
 		t.Fatal(err)
 	}
 	task.Status = domain.TaskVerifying
-	task.PikPakAccount = "pp1"
+	task.PikPakAccountID = "pp1"
 	task.PikPakRootFileID = "root-1"
 	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
 		t.Fatal(err)
