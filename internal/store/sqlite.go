@@ -191,6 +191,30 @@ func (s *SQLite) ListTasks(ctx context.Context, limit int) ([]domain.Task, error
 	return scanTasks(rows)
 }
 
+func (s *SQLite) PikPakKnownTaskIDs(ctx context.Context) (map[string]map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT pikpak_account_id, pikpak_task_id
+		FROM tasks
+		WHERE pikpak_account_id <> ''
+		  AND pikpak_task_id <> ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]map[string]struct{})
+	for rows.Next() {
+		var accountID, taskID string
+		if err := rows.Scan(&accountID, &taskID); err != nil {
+			return nil, err
+		}
+		if out[accountID] == nil {
+			out[accountID] = make(map[string]struct{})
+		}
+		out[accountID][taskID] = struct{}{}
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLite) PikPakActiveCounts(ctx context.Context) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT pikpak_account_id, COUNT(*)
