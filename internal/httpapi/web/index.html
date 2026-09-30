@@ -122,83 +122,84 @@
           <button id="settingsCancelBtn" class="ghost-btn" type="button">返回首页</button>
         </div>
 
-        <form id="setupForm" class="setup-form">
-          <section id="accountSection" class="editor-card resource-page hidden">
-            <div class="editor-head">
-              <div>
-                <span class="editor-kicker purple">PIKPAK</span>
-                <h3>PikPak 账号</h3>
-                <p>添加一个或多个账号，任务会自动选择可用账号。</p>
-              </div>
-              <button id="addAccountBtn" class="secondary-btn purple" type="button">+ 添加账号</button>
-            </div>
-            <div id="setupAccounts" class="setup-list"></div>
-          </section>
-
-          <section id="aria2Section" class="editor-card resource-page hidden">
-            <div class="editor-head">
-              <div>
-                <span class="editor-kicker green">ARIA2</span>
-                <h3>aria2 实例</h3>
-                <p>配置用于接收最终文件的 aria2 JSON-RPC 服务。</p>
-              </div>
-              <button id="addAria2Btn" class="secondary-btn green" type="button">+ 添加实例</button>
-            </div>
-            <div id="setupAria2" class="setup-list"></div>
-          </section>
-
-          <section id="targetSection" class="editor-card resource-page hidden">
-            <div class="editor-head">
-              <div>
-                <span class="editor-kicker orange">TARGETS</span>
-                <h3>下载目标</h3>
-                <p>把 aria2 实例和目标目录组合成可选择的下载位置。</p>
-              </div>
-              <button id="addTargetBtn" class="secondary-btn orange" type="button">+ 添加目标</button>
-            </div>
-            <div id="setupTargets" class="setup-list"></div>
-          </section>
-
-          <section id="generalSection" class="editor-card resource-page hidden">
-            <div class="editor-head">
-              <div>
-                <span class="editor-kicker">GENERAL</span>
-                <h3>设置</h3>
-                <p>资源配置已拆分到左侧独立页面。这里保留全局设置入口。</p>
-              </div>
-            </div>
-            <div class="general-settings">
-              <div class="general-setting-row">
-                <div>
-                  <strong>配置文件</strong>
-                  <span>/data/config.yaml</span>
-                </div>
-                <span class="badge success">热重载</span>
-              </div>
-              <div class="general-setting-row">
-                <div>
-                  <strong>全局高级参数</strong>
-                  <span>调度、清理等参数暂不在 Web UI 暴露。</span>
-                </div>
-                <span class="muted-label">暂不可编辑</span>
-              </div>
-            </div>
-          </section>
-
-          <div id="setupActions" class="setup-actions">
+        <section id="accountSection" class="resource-page hidden">
+          <div class="resource-toolbar">
             <div>
-              <strong>配置保存到 /data/config.yaml</strong>
-              <span>保存后立即热重载，不需要重启容器。</span>
+              <strong id="accountResourceCount">0 个账号</strong>
+              <span>系统会自动选择可用的 PikPak 账号。</span>
             </div>
-            <button id="setupSubmitBtn" class="primary-btn" type="submit">
-              <span id="setupSubmitLabel">保存配置</span>
-              <svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
-            </button>
+            <button id="addAccountBtn" class="primary-btn compact" type="button">+ 添加账号</button>
           </div>
-        </form>
+          <div id="accountResourceList" class="resource-list"></div>
+        </section>
+
+        <section id="aria2Section" class="resource-page hidden">
+          <div class="resource-toolbar">
+            <div>
+              <strong id="aria2ResourceCount">0 个实例</strong>
+              <span>管理用于接收最终文件的 aria2 JSON-RPC 服务。</span>
+            </div>
+            <button id="addAria2Btn" class="primary-btn compact" type="button">+ 添加实例</button>
+          </div>
+          <div id="aria2ResourceList" class="resource-list"></div>
+        </section>
+
+        <section id="targetSection" class="resource-page hidden">
+          <div class="resource-toolbar">
+            <div>
+              <strong id="targetResourceCount">0 个目标</strong>
+              <span>每个下载目标绑定一个 aria2 实例和下载目录。</span>
+            </div>
+            <button id="addTargetBtn" class="primary-btn compact" type="button">+ 添加目标</button>
+          </div>
+          <div id="targetResourceList" class="resource-list"></div>
+        </section>
+
+        <section id="generalSection" class="editor-card resource-page hidden">
+          <div class="editor-head">
+            <div>
+              <span class="editor-kicker">GENERAL</span>
+              <h3>设置</h3>
+              <p>资源配置已拆分到左侧独立页面。这里保留全局设置入口。</p>
+            </div>
+          </div>
+          <div class="general-settings">
+            <div class="general-setting-row">
+              <div>
+                <strong>配置文件</strong>
+                <span>/data/config.yaml</span>
+              </div>
+              <span class="badge success">热重载</span>
+            </div>
+            <div class="general-setting-row">
+              <div>
+                <strong>全局高级参数</strong>
+                <span>调度、清理等参数暂不在 Web UI 暴露。</span>
+              </div>
+              <span class="muted-label">暂不可编辑</span>
+            </div>
+          </div>
+        </section>
       </main>
     </section>
   </div>
+
+  <dialog id="resourceDialog" class="resource-dialog">
+    <form id="resourceForm" method="dialog">
+      <div class="dialog-head">
+        <div>
+          <span id="resourceDialogEyebrow" class="eyebrow">RESOURCE</span>
+          <h2 id="resourceDialogTitle">添加资源</h2>
+        </div>
+        <button id="resourceDialogClose" class="icon-btn" type="button">×</button>
+      </div>
+      <div id="resourceFormFields" class="resource-dialog-body"></div>
+      <div class="resource-dialog-actions">
+        <button id="resourceCancelBtn" class="ghost-btn" type="button">取消</button>
+        <button id="resourceSaveBtn" class="primary-btn" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="taskDialog">
     <div class="dialog-head">
