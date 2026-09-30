@@ -477,6 +477,9 @@ func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
 		task.PikPakAccountID = ""
 		task.PikPakTaskID = ""
 		task.PikPakRootFileID = ""
+		task.PikPakPhase = ""
+		task.PikPakProgress = 0
+		task.PikPakLastActivityAt = nil
 		task.Status = domain.TaskWaitingPikPakAccount
 	case domain.TaskAria2Failed:
 		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, false); err != nil {
