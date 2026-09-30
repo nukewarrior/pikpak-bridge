@@ -25,6 +25,7 @@ type taskStore interface {
 	GetTask(context.Context, string) (domain.Task, error)
 	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
+	PikPakActiveCounts(context.Context) (map[string]int, error)
 	ListDownloads(context.Context, string) ([]domain.Download, error)
 	ListTaskEvents(context.Context, string, int) ([]domain.TaskEvent, error)
 	ResetDownloadsForRetry(context.Context, string, bool) error
@@ -534,8 +535,9 @@ type accountStatusView struct {
 	QuotaTotal     int64     `json:"quota_total"`
 	StorageFree    int64     `json:"storage_free"`
 	StorageTotal   int64     `json:"storage_total"`
-	ActiveJobs     int       `json:"active_jobs"`
-	MaxJobs        int       `json:"max_jobs"`
+	ActiveJobs        int       `json:"active_jobs"`
+	ManagedActiveJobs int       `json:"managed_active_jobs"`
+	MaxJobs           int       `json:"max_jobs"`
 	State          string    `json:"state"`
 	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
 	Error          string    `json:"error,omitempty"`
@@ -567,6 +569,12 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
+	managedCounts, err := s.store.PikPakActiveCounts(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "count managed PikPak tasks")
+		return
+	}
+
 	accountIDs := s.runtime.AccountIDs()
 	accounts := make([]accountStatusView, len(accountIDs))
 	type result struct {
@@ -586,8 +594,9 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 				QuotaTotal:     snapshot.QuotaTotal,
 				StorageFree:    snapshot.StorageFree,
 				StorageTotal:   snapshot.StorageTotal,
-				ActiveJobs:     snapshot.ActiveJobs,
-				MaxJobs:        snapshot.MaxJobs,
+				ActiveJobs:        snapshot.ActiveJobs,
+				ManagedActiveJobs: managedCounts[id],
+				MaxJobs:           snapshot.MaxJobs,
 				State:          snapshot.State,
 				CooldownUntil:  snapshot.CooldownUntil,
 				CheckedAt:      time.Now().UTC(),
