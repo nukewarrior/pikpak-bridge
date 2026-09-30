@@ -215,7 +215,6 @@ func Validate(cfg *Config) error {
 
 	targetIDs := make(map[string]struct{}, len(cfg.Targets))
 	defaults := 0
-	enabledTargets := 0
 	for i, target := range cfg.Targets {
 		if strings.TrimSpace(target.ID) == "" || strings.TrimSpace(target.Name) == "" {
 			return fmt.Errorf("targets[%d] requires id and name", i)
@@ -234,7 +233,6 @@ func Validate(cfg *Config) error {
 			if !instanceEnabled[target.Aria2InstanceID] {
 				return fmt.Errorf("enabled target %q references disabled aria2 instance %q", target.ID, target.Aria2InstanceID)
 			}
-			enabledTargets++
 			if target.Default {
 				defaults++
 			}
