@@ -168,36 +168,42 @@ func (m *Manager) GetOfflineTask(ctx context.Context, accountID, taskID string) 
 	return OfflineTask{}, fmt.Errorf("pikpak offline task %q not found", taskID)
 }
 
-func (m *Manager) ListFiles(ctx context.Context, accountID, rootFileID string) ([]RemoteFile, error) {
+func (m *Manager) ResolveFiles(ctx context.Context, accountID, rootFileID string) (ResolvedFiles, error) {
 	entry, err := m.get(accountID)
 	if err != nil {
-		return nil, err
+		return ResolvedFiles{}, err
 	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	if err := entry.client.Login(ctx); err != nil {
-		return nil, err
+		return ResolvedFiles{}, err
 	}
 	root, err := entry.client.File(ctx, rootFileID)
 	if err != nil {
-		return nil, err
+		return ResolvedFiles{}, err
 	}
 	if root.Kind != fileKindFolder {
-		return []RemoteFile{{
-			ID:           root.ID,
-			ParentID:     root.ParentID,
-			Name:         root.Name,
-			RelativePath: root.Name,
-			Size:         int64(root.Size),
-			IsFolder:     false,
-		}}, nil
+		return ResolvedFiles{
+			RootName: root.Name,
+			Files: []RemoteFile{{
+				ID:           root.ID,
+				ParentID:     root.ParentID,
+				Name:         root.Name,
+				RelativePath: root.Name,
+				Size:         int64(root.Size),
+				IsFolder:     false,
+			}},
+		}, nil
 	}
 
 	var out []RemoteFile
 	if err := m.walkFiles(ctx, entry.client, root.ID, root.Name, &out); err != nil {
-		return nil, err
+		return ResolvedFiles{}, err
 	}
-	return out, nil
+	return ResolvedFiles{
+		RootName: root.Name,
+		Files:    out,
+	}, nil
 }
 
 func (m *Manager) walkFiles(ctx context.Context, client *Client, parentID, prefix string, out *[]RemoteFile) error {

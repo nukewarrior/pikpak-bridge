@@ -429,10 +429,11 @@ func (w *Worker) beginResolve(ctx context.Context, task *domain.Task) error {
 }
 
 func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
-	files, err := w.provider.ListFiles(ctx, task.PikPakAccountID, task.PikPakRootFileID)
+	resolved, err := w.provider.ResolveFiles(ctx, task.PikPakAccountID, task.PikPakRootFileID)
 	if err != nil {
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
+	files := resolved.Files
 
 	persisted := make([]domain.RemoteFile, 0, len(files))
 	downloadable := 0
@@ -457,11 +458,15 @@ func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
 	if err := w.store.ReplaceRemoteFiles(ctx, task.ID, persisted); err != nil {
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
+	if name := strings.TrimSpace(resolved.RootName); name != "" {
+		task.Name = name
+	}
 
 	slog.Info("PikPak 文件解析完成",
 		"task_id", task.ID,
 		"account_id", task.PikPakAccountID,
 		"root_file_id", task.PikPakRootFileID,
+		"task_name", task.Name,
 		"files", len(persisted),
 		"downloadable", downloadable,
 	)

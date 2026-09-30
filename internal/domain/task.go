@@ -29,6 +29,7 @@ type Task struct {
 	Source          string     `json:"source"`
 	SourceType      string     `json:"source_type"`
 	SourceKey       string     `json:"-"`
+	Name            string     `json:"name"`
 	TargetID        string     `json:"target_id"`
 	TargetName      string     `json:"target_name"`
 	Aria2InstanceID string     `json:"aria2_instance_id"`

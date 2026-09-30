@@ -37,11 +37,16 @@ type RemoteFile struct {
 	IsFolder     bool
 }
 
+type ResolvedFiles struct {
+	RootName string
+	Files    []RemoteFile
+}
+
 type Provider interface {
 	RefreshAccount(ctx context.Context, accountID string) (AccountSnapshot, error)
 	SubmitOffline(ctx context.Context, accountID, source string) (OfflineTask, error)
 	GetOfflineTask(ctx context.Context, accountID, taskID string) (OfflineTask, error)
-	ListFiles(ctx context.Context, accountID, rootFileID string) ([]RemoteFile, error)
+	ResolveFiles(ctx context.Context, accountID, rootFileID string) (ResolvedFiles, error)
 	GetDownloadURL(ctx context.Context, accountID, fileID string) (string, error)
 	DeletePermanently(ctx context.Context, accountID, fileID string) error
 }

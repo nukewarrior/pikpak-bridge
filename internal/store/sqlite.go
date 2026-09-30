@@ -58,6 +58,7 @@ func (s *SQLite) init(ctx context.Context) error {
 			source TEXT NOT NULL,
 			source_type TEXT NOT NULL,
 			source_key TEXT NOT NULL UNIQUE,
+			name TEXT NOT NULL DEFAULT '',
 			target_id TEXT NOT NULL,
 			target_name TEXT NOT NULL,
 			aria2_instance_id TEXT NOT NULL,
@@ -127,7 +128,7 @@ func (s *SQLite) init(ctx context.Context) error {
 	return nil
 }
 
-const taskColumns = `id, source, source_type, source_key,
+const taskColumns = `id, source, source_type, source_key, name,
 	target_id, target_name, aria2_instance_id, download_dir, status,
 	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
 	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
@@ -135,15 +136,16 @@ const taskColumns = `id, source, source_type, source_key,
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO tasks (
-			id, source, source_type, source_key,
+			id, source, source_type, source_key, name,
 			target_id, target_name, aria2_instance_id, download_dir, status,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		task.ID,
 		task.Source,
 		task.SourceType,
 		task.SourceKey,
+		task.Name,
 		task.TargetID,
 		task.TargetName,
 		task.Aria2InstanceID,
@@ -230,6 +232,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 
 	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET
+			name = ?,
 			status = ?,
 			pikpak_account_id = ?,
 			pikpak_task_id = ?,
@@ -242,6 +245,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 			completed_at = ?
 		WHERE id = ?
 	`,
+		task.Name,
 		string(task.Status),
 		task.PikPakAccountID,
 		task.PikPakTaskID,
@@ -657,6 +661,7 @@ func scan(row scanner) (domain.Task, error) {
 		&task.Source,
 		&task.SourceType,
 		&task.SourceKey,
+		&task.Name,
 		&task.TargetID,
 		&task.TargetName,
 		&task.Aria2InstanceID,

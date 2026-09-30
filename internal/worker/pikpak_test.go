@@ -14,6 +14,7 @@ import (
 type fakeProvider struct {
 	snapshot pikpak.AccountSnapshot
 	submit   pikpak.OfflineTask
+	rootName string
 	files    []pikpak.RemoteFile
 	submits  int
 }
@@ -28,8 +29,8 @@ func (f *fakeProvider) SubmitOffline(context.Context, string, string) (pikpak.Of
 func (f *fakeProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return f.submit, nil
 }
-func (f *fakeProvider) ListFiles(context.Context, string, string) ([]pikpak.RemoteFile, error) {
-	return f.files, nil
+func (f *fakeProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
+	return pikpak.ResolvedFiles{RootName: f.rootName, Files: f.files}, nil
 }
 func (f *fakeProvider) GetDownloadURL(context.Context, string, string) (string, error) {
 	return "", nil
@@ -79,6 +80,7 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 			Status:     pikpak.PhaseComplete,
 			RootFileID: "root-file",
 		},
+		rootName: "movie.mkv",
 		files: []pikpak.RemoteFile{{
 			ID:           "file-1",
 			ParentID:     "root-file",
@@ -110,6 +112,9 @@ func TestWorkerAdvancesCompleteTaskToWaitingAria2(t *testing.T) {
 	}
 	if got.PikPakAccountID != "pp1" || got.PikPakTaskID != "remote-task" || got.PikPakRootFileID != "root-file" {
 		t.Fatalf("unexpected PikPak state: %#v", got)
+	}
+	if got.Name != "movie.mkv" {
+		t.Fatalf("want resolved task name movie.mkv, got %q", got.Name)
 	}
 	files, err := db.ListRemoteFiles(context.Background(), task.ID)
 	if err != nil {
@@ -163,8 +168,8 @@ func (p *poolProvider) GetOfflineTask(context.Context, string, string) (pikpak.O
 	return pikpak.OfflineTask{}, nil
 }
 
-func (p *poolProvider) ListFiles(context.Context, string, string) ([]pikpak.RemoteFile, error) {
-	return nil, nil
+func (p *poolProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
+	return pikpak.ResolvedFiles{}, nil
 }
 
 func (p *poolProvider) GetDownloadURL(context.Context, string, string) (string, error) {
