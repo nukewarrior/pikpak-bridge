@@ -8,9 +8,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
 	"github.com/nukewarrior/pikpak-bridge/internal/config"
+	"github.com/nukewarrior/pikpak-bridge/internal/domain"
 	"github.com/nukewarrior/pikpak-bridge/internal/pikpak"
 	"github.com/nukewarrior/pikpak-bridge/internal/store"
 )
@@ -18,14 +20,34 @@ import (
 type fakeRuntime struct {
 	configured bool
 	applied    *config.Config
+	cfg        *config.Config
 	targets    []config.DownloadTarget
 }
 
 func (f *fakeRuntime) Configured() bool { return f.configured }
 
+func (f *fakeRuntime) CurrentConfig() *config.Config {
+	if f.cfg != nil {
+		return cloneTestConfig(f.cfg)
+	}
+	if f.applied != nil {
+		return cloneTestConfig(f.applied)
+	}
+	return nil
+}
+
 func (f *fakeRuntime) ApplySetup(_ context.Context, cfg *config.Config) error {
-	f.applied = cfg
-	f.targets = cfg.Targets
+	f.applied = cloneTestConfig(cfg)
+	f.cfg = cloneTestConfig(cfg)
+	f.targets = append([]config.DownloadTarget(nil), cfg.Targets...)
+	f.configured = true
+	return nil
+}
+
+func (f *fakeRuntime) ApplyConfig(_ context.Context, cfg *config.Config) error {
+	f.applied = cloneTestConfig(cfg)
+	f.cfg = cloneTestConfig(cfg)
+	f.targets = append([]config.DownloadTarget(nil), cfg.Targets...)
 	f.configured = true
 	return nil
 }
@@ -60,6 +82,31 @@ func openTestStore(t *testing.T) *store.SQLite {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	return db
+}
+
+func testConfig() *config.Config {
+	cfg := config.Default()
+	cfg.PikPak.Accounts = []config.PikPakAccount{{
+		ID: "pp01", Name: "Primary", Username: "user", Password: "account-secret", MaxJobs: 2,
+	}}
+	cfg.Aria2.Instances = []config.Aria2Instance{{
+		ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc", Secret: "rpc-secret",
+	}}
+	cfg.Targets = []config.DownloadTarget{{
+		ID: "movies", Name: "Movies", Aria2InstanceID: "nas", Dir: "/downloads/movies", Default: true,
+	}}
+	return cfg
+}
+
+func cloneTestConfig(src *config.Config) *config.Config {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	dst.PikPak.Accounts = append([]config.PikPakAccount(nil), src.PikPak.Accounts...)
+	dst.Aria2.Instances = append([]config.Aria2Instance(nil), src.Aria2.Instances...)
+	dst.Targets = append([]config.DownloadTarget(nil), src.Targets...)
+	return &dst
 }
 
 func TestWebUIRoutes(t *testing.T) {
@@ -125,6 +172,121 @@ func TestFirstRunSetup(t *testing.T) {
 	server.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodPost, "/api/v1/setup", bytes.NewReader(body)))
 	if second.Code != http.StatusConflict {
 		t.Fatalf("second setup: want 409, got %d", second.Code)
+	}
+}
+
+func TestConfigReadRedactsSecrets(t *testing.T) {
+	cfg := testConfig()
+	runtime := &fakeRuntime{configured: true, cfg: cfg, targets: cfg.Targets}
+	server := New(openTestStore(t), WithRuntime(runtime))
+
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if strings.Contains(body, "account-secret") || strings.Contains(body, "rpc-secret") {
+		t.Fatalf("configuration response leaked a secret: %s", body)
+	}
+	if !strings.Contains(body, `"password_set":true`) || !strings.Contains(body, `"secret_set":true`) {
+		t.Fatalf("configuration response did not report stored secrets: %s", body)
+	}
+}
+
+func TestConfigUpdatePreservesBlankSecrets(t *testing.T) {
+	cfg := testConfig()
+	runtime := &fakeRuntime{configured: true, cfg: cfg, targets: cfg.Targets}
+	server := New(openTestStore(t), WithRuntime(runtime))
+
+	payload := setupRequest{
+		PikPakAccounts: []setupPikPakAccount{{
+			ID: "pp01", Name: "Renamed", Username: "user", Password: "", MaxJobs: 3,
+		}},
+		Aria2Instances: []setupAria2Instance{{
+			ID: "nas", Name: "NAS Updated", URL: "http://aria2-new:6800/jsonrpc", Secret: "",
+		}},
+		Targets: []setupTarget{{
+			ID: "movies", Name: "Movies", Aria2InstanceID: "nas", Dir: "/media/movies", Default: true,
+		}},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", res.Code, res.Body.String())
+	}
+	if runtime.cfg.PikPak.Accounts[0].Password != "account-secret" {
+		t.Fatal("blank password replaced the stored PikPak password")
+	}
+	if runtime.cfg.Aria2.Instances[0].Secret != "rpc-secret" {
+		t.Fatal("blank secret replaced the stored aria2 secret")
+	}
+	if runtime.cfg.PikPak.Accounts[0].Name != "Renamed" || runtime.cfg.PikPak.Accounts[0].MaxJobs != 3 {
+		t.Fatalf("PikPak account update was not applied: %#v", runtime.cfg.PikPak.Accounts[0])
+	}
+	if runtime.cfg.Aria2.Instances[0].URL != "http://aria2-new:6800/jsonrpc" {
+		t.Fatalf("aria2 update was not applied: %#v", runtime.cfg.Aria2.Instances[0])
+	}
+	if runtime.cfg.Targets[0].Dir != "/media/movies" {
+		t.Fatalf("target update was not applied: %#v", runtime.cfg.Targets[0])
+	}
+}
+
+func TestConfigUpdateRejectsRemovingActivePikPakAccount(t *testing.T) {
+	db := openTestStore(t)
+	cfg := testConfig()
+	runtime := &fakeRuntime{configured: true, cfg: cfg, targets: cfg.Targets}
+	server := New(db, WithRuntime(runtime))
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID: "active-task", Source: "https://example.invalid/file", SourceType: "https", SourceKey: "url:active",
+		TargetID: "movies", TargetName: "Movies", Aria2InstanceID: "nas", DownloadDir: "/downloads/movies",
+		Status: domain.TaskQueued, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status = domain.TaskPikPakRunning
+	task.PikPakAccountID = "pp01"
+	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := setupRequest{
+		PikPakAccounts: []setupPikPakAccount{{
+			ID: "pp02", Name: "Other", Username: "other", Password: "other-secret", MaxJobs: 2,
+		}},
+		Aria2Instances: []setupAria2Instance{{
+			ID: "nas", Name: "NAS", URL: "http://aria2:6800/jsonrpc",
+		}},
+		Targets: []setupTarget{{
+			ID: "movies", Name: "Movies", Aria2InstanceID: "nas", Dir: "/downloads/movies", Default: true,
+		}},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/config", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusConflict {
+		t.Fatalf("want 409, got %d: %s", res.Code, res.Body.String())
+	}
+	if !strings.Contains(res.Body.String(), "pp01") {
+		t.Fatalf("conflict did not identify the active account: %s", res.Body.String())
 	}
 }
 
