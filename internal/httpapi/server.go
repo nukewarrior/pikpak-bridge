@@ -21,7 +21,7 @@ import (
 type taskStore interface {
 	CreateTask(context.Context, domain.Task) error
 	GetTask(context.Context, string) (domain.Task, error)
-	GetTaskBySourceTarget(context.Context, string, string) (domain.Task, error)
+	GetTaskBySourceKey(context.Context, string) (domain.Task, error)
 	ListTasks(context.Context, int) ([]domain.Task, error)
 	ListDownloads(context.Context, string) ([]domain.Download, error)
 }
@@ -283,13 +283,13 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input,
 	}
 	if err := s.store.CreateTask(r.Context(), task); err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
-			existing, getErr := s.store.GetTaskBySourceTarget(r.Context(), n.SourceKey, target.ID)
+			existing, getErr := s.store.GetTaskBySourceKey(r.Context(), n.SourceKey)
 			if getErr != nil {
-				writeError(w, http.StatusConflict, "task already exists for this target")
+				writeError(w, http.StatusConflict, "task already exists")
 				return
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":            "task already exists for this target",
+				"error":            "task already exists",
 				"existing_task_id": existing.ID,
 				"status":           existing.Status,
 				"target_id":        existing.TargetID,
