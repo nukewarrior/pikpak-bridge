@@ -172,7 +172,7 @@ GET /api/v1/tasks/{id}/downloads
 GET /healthz
 ~~~
 
-Duplicate detection is scoped to `(source, target)`, so the same source may be downloaded to different targets.
+A normalized source is globally unique while its task exists. This preserves the invariant that one bridge task owns one PikPak offline task/root and is the only task allowed to clean it up.
 
 ## Safety
 
