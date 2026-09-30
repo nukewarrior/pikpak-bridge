@@ -41,6 +41,33 @@ const TERMINAL_TASKS = new Set([
   "COMPLETED","CANCELLED","PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_FAILED"
 ]);
 
+const ERROR_EVENT_HINTS = [
+  "failed","retry","error","eof","rejected","missing","manual_retry"
+];
+
+function isErrorHistoryEvent(event) {
+  const type = String(event?.type || "").toLowerCase();
+  return ERROR_EVENT_HINTS.some(hint => type.includes(hint));
+}
+
+function eventLabel(type) {
+  const labels = {
+    "task.manual_retry": "手动重试",
+    "aria2.eof_retry": "PikPak EOF 重试",
+    "aria2.eof_exhausted": "PikPak EOF 重试耗尽",
+    "aria2.file_retry": "aria2 文件重试",
+    "aria2.poll_retry": "aria2 状态查询重试",
+    "aria2.failed": "aria2 失败",
+    "pikpak.retry": "PikPak 重试",
+    "pikpak.failed": "PikPak 失败",
+    "pikpak.account_rejected": "PikPak 账号不可用",
+    "verify.failed": "校验失败",
+    "cleanup.retry": "清理重试",
+    "cleanup.failed": "清理失败"
+  };
+  return labels[type] || type || "错误";
+}
+
 let appConfigured = false;
 let dashboardStarted = false;
 let taskRefreshBusy = false;
@@ -908,11 +935,14 @@ async function openTask(id) {
   $("dialogBody").innerHTML = '<div class="empty-state"><span>正在加载…</span></div>';
   dialog.showModal();
   try {
-    const [task, downloadsData] = await Promise.all([
+    const [task, downloadsData, eventsData] = await Promise.all([
       request(`/api/v1/tasks/${encodeURIComponent(id)}`),
-      request(`/api/v1/tasks/${encodeURIComponent(id)}/downloads`)
+      request(`/api/v1/tasks/${encodeURIComponent(id)}/downloads`),
+      request(`/api/v1/tasks/${encodeURIComponent(id)}/events?limit=200`)
     ]);
     const downloads = downloadsData.downloads || [];
+    const events = (eventsData.events || []).filter(isErrorHistoryEvent);
+    const canRetry = FAILED_TASKS.has(task.status);
     $("dialogBody").innerHTML = `
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
@@ -923,11 +953,35 @@ async function openTask(id) {
         <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account_id || "—")}</dd>
         <dt>PikPak Task ID</dt><dd>${esc(task.pikpak_task_id || "—")}</dd>
         <dt>PikPak Root ID</dt><dd>${esc(task.pikpak_root_file_id || "—")}</dd>
-        <dt>重试次数</dt><dd>${task.retry_count ?? 0}</dd>
+        <dt>当前重试次数</dt><dd>${task.retry_count ?? 0}</dd>
+        <dt>手动重试次数</dt><dd>${task.manual_retry_count ?? 0}</dd>
         <dt>创建时间</dt><dd>${fmtTime(task.created_at)}</dd>
         <dt>更新时间</dt><dd>${fmtTime(task.updated_at)}</dd>
-        <dt>错误</dt><dd>${esc(task.error || "—")}</dd>
+        <dt>当前错误</dt><dd>${esc(task.error || "—")}</dd>
       </dl>
+      ${canRetry ? `
+        <div class="task-retry-panel">
+          <div>
+            <strong>重新尝试这个失败任务</strong>
+            <span>保留错误历史，并重新获得完整 10 次自动重试机会。</span>
+          </div>
+          <button id="retryTaskBtn" class="primary-btn compact" type="button">重试任务</button>
+        </div>` : ""}
+      <div class="detail-section">
+        <h3>错误历史（${events.length}）</h3>
+        <div class="error-history">
+          ${events.length ? events.map(event => `
+            <div class="error-history-row">
+              <div class="error-history-head">
+                <strong>${esc(eventLabel(event.type))}</strong>
+                <span>${esc(fmtTime(event.created_at))}</span>
+              </div>
+              <div class="error-history-message">${esc(event.message || "—")}</div>
+              <div class="error-history-type">${esc(event.type || "")}</div>
+            </div>
+          `).join("") : '<div class="error-history-empty">暂无错误或重试记录</div>'}
+        </div>
+      </div>
       <div class="detail-section">
         <h3>下载文件（${downloads.length}）</h3>
         ${downloads.length ? downloads.map(d => `
@@ -935,6 +989,8 @@ async function openTask(id) {
             <div>
               <div class="download-name">${esc(d.relative_path)}</div>
               <div class="download-meta">GID ${esc(d.aria2_gid || "—")} · ${esc(d.aria2_instance_id || "—")}</div>
+              <div class="download-meta">普通重试 ${d.retry_count ?? 0}/10 · EOF 重试 ${d.eof_retry_count ?? 0}/10</div>
+              ${d.last_error ? `<div class="download-error">${esc(d.last_error)}</div>` : ""}
             </div>
             <div>
               ${statusBadge(d.status)}
@@ -943,6 +999,23 @@ async function openTask(id) {
           </div>
         `).join("") : '<div class="empty-state"><span>尚未创建 aria2 下载记录</span></div>'}
       </div>`;
+
+    const retryButton = $("retryTaskBtn");
+    if (retryButton) {
+      retryButton.addEventListener("click", async () => {
+        if (!window.confirm("确定重试这个失败任务吗？它会重新获得完整 10 次自动重试机会。")) return;
+        retryButton.disabled = true;
+        try {
+          await request(`/api/v1/tasks/${encodeURIComponent(id)}/retry`, {method:"POST"});
+          toast("任务已重新开始，并重新获得 10 次重试机会。");
+          await Promise.all([loadTasks(), loadHistoryTasks()]);
+          await openTask(id);
+        } catch (err) {
+          toast("重试失败：" + err.message, true);
+          retryButton.disabled = false;
+        }
+      });
+    }
   } catch (err) {
     $("dialogBody").innerHTML = `<div class="empty-state"><strong>加载失败</strong><span>${esc(err.message)}</span></div>`;
   }
