@@ -82,8 +82,8 @@ func (fakeURLProvider) SubmitOffline(context.Context, string, string) (pikpak.Of
 func (fakeURLProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return pikpak.OfflineTask{}, nil
 }
-func (fakeURLProvider) ListFiles(context.Context, string, string) ([]pikpak.RemoteFile, error) {
-	return nil, nil
+func (fakeURLProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
+	return pikpak.ResolvedFiles{}, nil
 }
 func (fakeURLProvider) GetDownloadURL(context.Context, string, string) (string, error) {
 	return "https://example.invalid/file", nil
