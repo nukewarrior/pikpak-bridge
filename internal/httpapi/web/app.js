@@ -198,10 +198,16 @@ function sourceIcon() {
   return `<svg viewBox="0 0 24 24"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v6h5"/></svg>`;
 }
 
+function makeInternalId(prefix) {
+  const bytes = new Uint8Array(4);
+  crypto.getRandomValues(bytes);
+  return prefix + "-" + [...bytes].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
 function accountEntry(values={}) {
   accountSeq += 1;
   const index = accountSeq;
-  const id = values.id || "pp" + String(index).padStart(2,"0");
+  const id = values.id || makeInternalId("pp");
   const div = document.createElement("div");
   div.className = "setup-entry";
   div.dataset.kind = "account";
@@ -211,13 +217,10 @@ function accountEntry(values={}) {
       <button class="remove-btn" type="button">移除</button>
     </div>
     <div class="setup-grid">
+      <input data-field="id" type="hidden" value="${esc(id)}">
       <div class="field">
-        <label>稳定 ID</label>
-        <input data-field="id" value="${esc(id)}" required>
-      </div>
-      <div class="field">
-        <label>显示名称</label>
-        <input data-field="name" value="${esc(values.name || id)}" required>
+        <label>名称</label>
+        <input data-field="name" value="${esc(values.name || ("PikPak 账号 " + index))}" required>
       </div>
       <div class="field">
         <label>账号</label>
@@ -243,7 +246,7 @@ function accountEntry(values={}) {
 function aria2Entry(values={}) {
   aria2Seq += 1;
   const index = aria2Seq;
-  const id = values.id || (index === 1 ? "unraid" : "aria2-" + String(index).padStart(2,"0"));
+  const id = values.id || makeInternalId("aria2");
   const div = document.createElement("div");
   div.className = "setup-entry";
   div.dataset.kind = "aria2";
@@ -253,13 +256,10 @@ function aria2Entry(values={}) {
       <button class="remove-btn" type="button">移除</button>
     </div>
     <div class="setup-grid">
+      <input data-field="id" type="hidden" value="${esc(id)}">
       <div class="field">
-        <label>稳定 ID</label>
-        <input data-field="id" value="${esc(id)}" required>
-      </div>
-      <div class="field">
-        <label>显示名称</label>
-        <input data-field="name" value="${esc(values.name || id)}" required>
+        <label>名称</label>
+        <input data-field="name" value="${esc(values.name || ("aria2 实例 " + index))}" required>
       </div>
       <div class="field wide">
         <label>JSON-RPC 地址</label>
@@ -286,7 +286,7 @@ function aria2Entry(values={}) {
 function targetEntry(values={}) {
   targetSeq += 1;
   const index = targetSeq;
-  const id = values.id || (index === 1 ? "default" : "target-" + String(index).padStart(2,"0"));
+  const id = values.id || makeInternalId("target");
   const div = document.createElement("div");
   div.className = "setup-entry";
   div.dataset.kind = "target";
@@ -296,13 +296,10 @@ function targetEntry(values={}) {
       <button class="remove-btn" type="button">移除</button>
     </div>
     <div class="setup-grid">
+      <input data-field="id" type="hidden" value="${esc(id)}">
       <div class="field">
-        <label>稳定 ID</label>
-        <input data-field="id" value="${esc(id)}" required>
-      </div>
-      <div class="field">
-        <label>显示名称</label>
-        <input data-field="name" value="${esc(values.name || (index === 1 ? "默认下载" : id))}" required>
+        <label>名称</label>
+        <input data-field="name" value="${esc(values.name || (index === 1 ? "默认下载" : "下载目标 " + index))}" required>
       </div>
       <div class="field">
         <label>aria2 实例</label>
