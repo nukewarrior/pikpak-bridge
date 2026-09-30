@@ -54,12 +54,12 @@ func NewAria2(store aria2Store, provider pikpak.Provider, backend aria2.Backend,
 }
 
 func (w *Aria2Worker) Run(ctx context.Context) {
-	slog.Info("aria2 worker started",
+	slog.Info("aria2 工作者已启动",
 		"worker_interval", w.options.WorkerInterval,
 		"status_interval", w.options.StatusInterval,
 		"retry_interval", w.options.RetryInterval,
 	)
-	defer slog.Info("aria2 worker stopped")
+	defer slog.Info("aria2 工作者已停止")
 	w.runOnceLogged(ctx)
 	ticker := time.NewTicker(w.options.WorkerInterval)
 	defer ticker.Stop()
@@ -75,7 +75,7 @@ func (w *Aria2Worker) Run(ctx context.Context) {
 
 func (w *Aria2Worker) runOnceLogged(ctx context.Context) {
 	if err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("aria2 worker iteration failed", "error", err)
+		slog.Error("aria2 工作循环执行失败", "error", err)
 	}
 }
 
@@ -89,7 +89,7 @@ func (w *Aria2Worker) RunOnce(ctx context.Context) error {
 			return err
 		}
 		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("aria2 task processing failed", "task_id", tasks[i].ID, "error", err)
+			slog.Warn("aria2 任务处理失败", "task_id", tasks[i].ID, "error", err)
 		}
 	}
 	return nil
@@ -108,7 +108,7 @@ func (w *Aria2Worker) processTask(ctx context.Context, task *domain.Task) error 
 		if err := w.store.EnsureDownloads(ctx, task.ID, task.Aria2InstanceID, deterministicGID); err != nil {
 			return w.retryTask(ctx, task, err)
 		}
-		slog.Info("aria2 dispatch started",
+		slog.Info("开始向 aria2 分发任务",
 			"task_id", task.ID,
 			"target_id", task.TargetID,
 			"aria2_instance_id", task.Aria2InstanceID,
@@ -141,7 +141,7 @@ func (w *Aria2Worker) targetReady(ctx context.Context, task *domain.Task) (bool,
 }
 
 func (w *Aria2Worker) waitForTarget(ctx context.Context, task *domain.Task, reason string) error {
-	slog.Warn("aria2 target not ready",
+	slog.Warn("aria2 下载目标暂不可用",
 		"task_id", task.ID,
 		"target_id", task.TargetID,
 		"aria2_instance_id", task.Aria2InstanceID,
@@ -176,18 +176,18 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 		switch download.Status {
 		case domain.DownloadPending:
 			if err := w.submitDownload(ctx, task, download); err != nil {
-				slog.Warn("aria2 file submit failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
 		case domain.DownloadError:
 			if download.RetryCount >= w.options.MaxRetry {
 				continue
 			}
 			if err := w.submitDownload(ctx, task, download); err != nil {
-				slog.Warn("aria2 file submit failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
 		default:
 			if err := w.pollDownload(ctx, download); err != nil {
-				slog.Warn("aria2 file poll failed", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				slog.Warn("aria2 文件状态查询失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
 			}
 		}
 	}
@@ -210,7 +210,7 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 		return w.failTask(ctx, task, errors.New("one or more aria2 downloads exhausted retries"))
 	}
 	if allComplete {
-		slog.Info("aria2 downloads complete",
+		slog.Info("aria2 下载全部完成",
 			"task_id", task.ID,
 			"aria2_instance_id", task.Aria2InstanceID,
 			"files", len(downloads),
@@ -254,7 +254,7 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if gid != download.Aria2GID {
 		return w.retryDownload(ctx, download, fmt.Errorf("aria2 returned unexpected gid %q, want %q", gid, download.Aria2GID))
 	}
-	slog.Info("aria2 download submitted",
+	slog.Info("aria2 下载已提交",
 		"task_id", task.ID,
 		"aria2_instance_id", download.Aria2InstanceID,
 		"gid", gid,
