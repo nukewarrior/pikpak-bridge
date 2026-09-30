@@ -237,7 +237,6 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 
 	switch remote.Status {
 	case pikpak.PhaseError:
-		w.noteJobFinished(task.PikPakAccountID)
 		task.Status = domain.TaskPikPakFailed
 		task.Error = nonEmpty(remote.Error, "PikPak offline task failed")
 	case pikpak.PhaseComplete:
@@ -275,7 +274,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 
 	switch remote.Status {
 	case pikpak.PhaseComplete:
-		w.noteJobFinished(task.PikPakAccountID)
+		w.invalidateAccount(task.PikPakAccountID)
 		if task.PikPakRootFileID == "" {
 			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 			task.Error = "PikPak task complete but root file ID is not available yet"
@@ -284,6 +283,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			task.NextAttemptAt = nil
 		}
 	case pikpak.PhaseError:
+		w.invalidateAccount(task.PikPakAccountID)
 		task.Status = domain.TaskPikPakFailed
 		task.NextAttemptAt = nil
 		task.Error = nonEmpty(remote.Error, "PikPak offline task failed")
@@ -438,11 +438,8 @@ func (w *Worker) noteSubmitSuccess(id string, created, active bool) {
 	runtime.failures = 0
 }
 
-func (w *Worker) noteJobFinished(id string) {
-	runtime := w.runtime(id)
-	if runtime.snapshot.ActiveJobs > 0 {
-		runtime.snapshot.ActiveJobs--
-	}
+func (w *Worker) invalidateAccount(id string) {
+	w.runtime(id).refreshed = time.Time{}
 }
 
 func ParseByteSize(input string) (int64, error) {
