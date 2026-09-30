@@ -116,7 +116,7 @@ func TestWebUIRoutes(t *testing.T) {
 		contentType string
 		contains    string
 	}{
-		{"/", "text/html", "setupForm"},
+		{"/", "text/html", "resourceDialog"},
 		{"/assets/styles.css", "text/css", "setup-screen"},
 		{"/assets/app.js", "javascript", "bootstrap"},
 	} {
