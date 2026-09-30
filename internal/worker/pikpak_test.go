@@ -464,7 +464,7 @@ func TestWorkerCancelsStalledPikPakTaskAndReleasesManagedSlot(t *testing.T) {
 	}
 }
 
-func TestWorkerIgnoresUnmanagedRemoteJobsForBridgeConcurrency(t *testing.T) {
+func TestWorkerIgnoresOwnedRemoteGhostsForBridgeConcurrency(t *testing.T) {
 	db, err := store.Open(t.TempDir() + "/managed-concurrency.db")
 	if err != nil {
 		t.Fatal(err)
@@ -472,6 +472,35 @@ func TestWorkerIgnoresUnmanagedRemoteJobsForBridgeConcurrency(t *testing.T) {
 	defer db.Close()
 
 	now := time.Now().UTC()
+	for i, remoteID := range []string{"ghost-1", "ghost-2"} {
+		ghost := domain.Task{
+			ID:              fmt.Sprintf("ghost-task-%d", i+1),
+			Source:          fmt.Sprintf("https://example.invalid/ghost-%d", i+1),
+			SourceType:      "https",
+			SourceKey:       fmt.Sprintf("url:ghost-%d", i+1),
+			TargetID:        "default",
+			TargetName:      "默认",
+			Aria2InstanceID: "nas",
+			DownloadDir:     "/downloads",
+			Status:          domain.TaskQueued,
+			CreatedAt:       now.Add(-time.Hour),
+			UpdatedAt:       now.Add(-time.Hour),
+		}
+		if err := db.CreateTask(context.Background(), ghost); err != nil {
+			t.Fatal(err)
+		}
+		ghost, err = db.GetTask(context.Background(), ghost.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ghost.Status = domain.TaskPikPakFailed
+		ghost.PikPakAccountID = "pp1"
+		ghost.PikPakTaskID = remoteID
+		if err := db.SaveTask(context.Background(), &ghost, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	task := domain.Task{
 		ID:              "queued-behind-ghosts",
 		Source:          "https://example.invalid/new-file",
@@ -493,7 +522,7 @@ func TestWorkerIgnoresUnmanagedRemoteJobsForBridgeConcurrency(t *testing.T) {
 		"pp1": {
 			ID: "pp1", Name: "PikPak 1", Enabled: true, Healthy: true,
 			QuotaRemaining: 3, QuotaTotal: 3, StorageFree: 10_000_000_000,
-			ActiveJobs: 2, MaxJobs: 2,
+			ActiveJobs: 2, ActiveTaskIDs: []string{"ghost-1", "ghost-2"}, MaxJobs: 2,
 		},
 	}}
 	w := New(db, provider, Options{
@@ -506,6 +535,59 @@ func TestWorkerIgnoresUnmanagedRemoteJobsForBridgeConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(provider.submits) != 1 || provider.submits[0] != "pp1" {
-		t.Fatalf("unmanaged remote jobs blocked bridge scheduling: %#v", provider.submits)
+		t.Fatalf("owned remote ghosts blocked bridge scheduling: %#v", provider.submits)
+	}
+}
+
+func TestWorkerCountsTrulyExternalRemoteJobsAgainstConcurrency(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/external-concurrency.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "queued-behind-external",
+		Source:          "https://example.invalid/external-block",
+		SourceType:      "https",
+		SourceKey:       "url:external-block",
+		TargetID:        "default",
+		TargetName:      "默认",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &poolProvider{snapshots: map[string]pikpak.AccountSnapshot{
+		"pp1": {
+			ID: "pp1", Name: "PikPak 1", Enabled: true, Healthy: true,
+			QuotaRemaining: 3, QuotaTotal: 3, StorageFree: 10_000_000_000,
+			ActiveJobs: 2, ActiveTaskIDs: []string{"manual-1", "manual-2"}, MaxJobs: 2,
+		},
+	}}
+	w := New(db, provider, Options{
+		AccountIDs:    []string{"pp1"},
+		QuotaRefresh:  time.Hour,
+		RetryInterval: time.Minute,
+		MaxRetry:      3,
+	})
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.submits) != 0 {
+		t.Fatalf("external PikPak jobs should count against concurrency: %#v", provider.submits)
+	}
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskWaitingPikPakAccount {
+		t.Fatalf("want WAITING_PIKPAK_ACCOUNT, got %s", got.Status)
 	}
 }
