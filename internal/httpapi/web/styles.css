@@ -1316,3 +1316,44 @@ dialog::backdrop {
   }
   .compact-field { max-width: none; }
 }
+
+
+.resource-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-health-meta {
+  margin-top: 6px;
+  color: #46556f;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.resource-health-meta.muted {
+  color: #9aa6b9;
+  font-weight: 500;
+}
+
+.resource-health-meta.error {
+  color: var(--red);
+  font-weight: 600;
+}
+
+.resource-health-time {
+  margin-top: 3px;
+  color: #a0acbe;
+  font-size: 9px;
+}
+
+@media (max-width: 680px) {
+  .resource-toolbar-actions {
+    width: 100%;
+  }
+  .resource-toolbar-actions .ghost-btn,
+  .resource-toolbar-actions .primary-btn {
+    flex: 1;
+  }
+}
