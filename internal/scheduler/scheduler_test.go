@@ -7,43 +7,46 @@ import (
 	"github.com/nukewarrior/pikpak-bridge/internal/pikpak"
 )
 
-func TestSelectPikPakAccount(t *testing.T) {
+func TestSelectPikPakAccountPrefersLowerLoadRatio(t *testing.T) {
 	now := time.Now()
 	accounts := []pikpak.AccountSnapshot{
-		{Name: "quota-empty", Enabled: true, Healthy: true, QuotaRemaining: 0, StorageFree: 100},
-		{Name: "busy", Enabled: true, Healthy: true, QuotaRemaining: 3, ActiveJobs: 2, MaxJobs: 2, StorageFree: 100},
-		{Name: "a", Enabled: true, Healthy: true, QuotaRemaining: 2, ActiveJobs: 1, MaxJobs: 2, StorageFree: 100, LastUsedAt: now.Add(-time.Minute)},
-		{Name: "b", Enabled: true, Healthy: true, QuotaRemaining: 3, ActiveJobs: 1, MaxJobs: 2, StorageFree: 100, LastUsedAt: now},
+		{ID: "quota-empty", Enabled: true, Healthy: true, QuotaRemaining: 0, StorageFree: 100, MaxJobs: 2},
+		{ID: "busy", Enabled: true, Healthy: true, QuotaRemaining: 3, ActiveJobs: 2, MaxJobs: 2, StorageFree: 100},
+		{ID: "half", Enabled: true, Healthy: true, QuotaRemaining: 3, ActiveJobs: 1, MaxJobs: 2, StorageFree: 100},
+		{ID: "idle", Enabled: true, Healthy: true, QuotaRemaining: 2, ActiveJobs: 0, MaxJobs: 2, StorageFree: 100},
 	}
+
 	got, err := SelectPikPakAccount(accounts, 10, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "b" {
-		t.Fatalf("want b, got %s", got.Name)
+	if got.ID != "idle" {
+		t.Fatalf("want idle, got %s", got.ID)
 	}
 }
 
-func TestSelectAria2Instance(t *testing.T) {
-	instances := []Aria2Snapshot{
-		{Name: "full", Enabled: true, Healthy: true, Active: 4, MaxActive: 4, Weight: 10},
-		{Name: "home", Enabled: true, Healthy: true, Active: 2, MaxActive: 4, Weight: 10},
-		{Name: "vps", Enabled: true, Healthy: true, Active: 0, MaxActive: 2, Weight: 1},
+func TestSelectPikPakAccountUsesQuotaThenLRU(t *testing.T) {
+	now := time.Now()
+	accounts := []pikpak.AccountSnapshot{
+		{ID: "older", Enabled: true, Healthy: true, QuotaRemaining: 3, MaxJobs: 2, StorageFree: 100, LastUsedAt: now.Add(-time.Hour)},
+		{ID: "newer", Enabled: true, Healthy: true, QuotaRemaining: 3, MaxJobs: 2, StorageFree: 100, LastUsedAt: now},
+		{ID: "less-quota", Enabled: true, Healthy: true, QuotaRemaining: 2, MaxJobs: 2, StorageFree: 100, LastUsedAt: time.Time{}},
 	}
-	got, err := SelectAria2Instance(instances)
+
+	got, err := SelectPikPakAccount(accounts, 10, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "home" {
-		t.Fatalf("want home because capacity and weight outweigh idle status, got %s", got.Name)
+	if got.ID != "older" {
+		t.Fatalf("want older, got %s", got.ID)
 	}
 }
 
 func TestSelectPikPakAccountRejectsInsufficientSpace(t *testing.T) {
 	now := time.Now()
 	accounts := []pikpak.AccountSnapshot{
-		{Name: "full", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 0},
-		{Name: "small", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 1024},
+		{ID: "full", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 0, MaxJobs: 2},
+		{ID: "small", Enabled: true, Healthy: true, QuotaRemaining: 3, StorageFree: 1024, MaxJobs: 2},
 	}
 	if _, err := SelectPikPakAccount(accounts, 2048, now); err != ErrNoPikPakAccount {
 		t.Fatalf("want ErrNoPikPakAccount, got %v", err)

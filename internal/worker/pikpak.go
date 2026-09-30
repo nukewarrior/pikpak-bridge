@@ -22,7 +22,7 @@ type pikpakStore interface {
 }
 
 type Options struct {
-	AccountNames            []string
+	AccountIDs              []string
 	WorkerInterval          time.Duration
 	QuotaRefresh            time.Duration
 	StatusInterval          time.Duration
@@ -46,6 +46,7 @@ type accountRuntime struct {
 	refreshed time.Time
 	failures  int
 	cooldown  time.Time
+	reserved  int
 }
 
 func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
@@ -75,7 +76,7 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 		store:    store,
 		provider: provider,
 		options:  options,
-		accounts: make(map[string]*accountRuntime, len(options.AccountNames)),
+		accounts: make(map[string]*accountRuntime, len(options.AccountIDs)),
 	}
 }
 
@@ -119,9 +120,9 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 func (w *Worker) processTask(ctx context.Context, task *domain.Task) error {
 	switch task.Status {
 	case domain.TaskQueued, domain.TaskWaitingPikPakAccount:
-		return w.selectAccount(ctx, task)
+		return w.selectAndSubmit(ctx, task)
 	case domain.TaskPikPakSubmitting:
-		return w.submit(ctx, task)
+		return w.submit(ctx, task, false)
 	case domain.TaskPikPakRunning:
 		return w.poll(ctx, task)
 	case domain.TaskPikPakComplete:
@@ -133,16 +134,17 @@ func (w *Worker) processTask(ctx context.Context, task *domain.Task) error {
 	}
 }
 
-func (w *Worker) selectAccount(ctx context.Context, task *domain.Task) error {
+func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	now := time.Now().UTC()
-	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountNames))
-	for _, name := range w.options.AccountNames {
-		runtime := w.runtime(name)
+	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
+	for _, id := range w.options.AccountIDs {
+		runtime := w.runtime(id)
 		if now.Before(runtime.cooldown) {
 			if runtime.has {
 				snapshot := runtime.snapshot
 				snapshot.Healthy = false
 				snapshot.CooldownUntil = runtime.cooldown
+				snapshot.ActiveJobs += runtime.reserved
 				snapshots = append(snapshots, snapshot)
 			}
 			continue
@@ -151,21 +153,22 @@ func (w *Worker) selectAccount(ctx context.Context, task *domain.Task) error {
 		if runtime.has && now.Sub(runtime.refreshed) < w.options.QuotaRefresh {
 			snapshot := runtime.snapshot
 			snapshot.CooldownUntil = runtime.cooldown
+			snapshot.ActiveJobs += runtime.reserved
 			snapshots = append(snapshots, snapshot)
 			continue
 		}
 
-		snapshot, err := w.provider.RefreshAccount(ctx, name)
+		snapshot, err := w.provider.RefreshAccount(ctx, id)
 		if err != nil {
-			w.noteAccountFailure(name, snapshot, err, now)
+			w.noteAccountFailure(id, snapshot, err, now)
 			continue
 		}
-		w.noteAccountSuccess(name, snapshot, now)
+		w.noteAccountSuccess(id, snapshot, now)
+		snapshot.ActiveJobs += runtime.reserved
 		snapshots = append(snapshots, snapshot)
 	}
 
-	requiredBytes := w.options.MinFreeSpace
-	selected, err := scheduler.SelectPikPakAccount(snapshots, requiredBytes, now)
+	selected, err := scheduler.SelectPikPakAccount(snapshots, w.options.MinFreeSpace, now)
 	if err != nil {
 		task.Status = domain.TaskWaitingPikPakAccount
 		task.Error = "no eligible PikPak account"
@@ -173,29 +176,40 @@ func (w *Worker) selectAccount(ctx context.Context, task *domain.Task) error {
 		return w.store.SaveTask(ctx, task, "pikpak.waiting_account", task.Error)
 	}
 
-	task.PikPakAccount = selected.Name
+	runtime := w.runtime(selected.ID)
+	runtime.reserved++
+
+	task.PikPakAccountID = selected.ID
 	task.PikPakTaskID = ""
 	task.PikPakRootFileID = ""
 	task.Status = domain.TaskPikPakSubmitting
 	task.Error = ""
 	task.RetryCount = 0
 	task.NextAttemptAt = nil
-	return w.store.SaveTask(ctx, task, "pikpak.account_selected", selected.Name)
+	if err := w.store.SaveTask(ctx, task, "pikpak.account_selected", selected.ID); err != nil {
+		runtime.reserved--
+		return err
+	}
+
+	return w.submit(ctx, task, true)
 }
 
-func (w *Worker) submit(ctx context.Context, task *domain.Task) error {
-	if task.PikPakAccount == "" {
+func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) error {
+	if task.PikPakAccountID == "" {
 		task.Status = domain.TaskWaitingPikPakAccount
 		task.NextAttemptAt = nil
 		return w.store.SaveTask(ctx, task, "pikpak.account_missing", "reselect account")
 	}
+	if reserved {
+		defer w.releaseReservation(task.PikPakAccountID)
+	}
 
-	remote, err := w.provider.SubmitOffline(ctx, task.PikPakAccount, task.Source)
+	remote, err := w.provider.SubmitOffline(ctx, task.PikPakAccountID, task.Source)
 	if err != nil {
-		w.noteSubmitError(task.PikPakAccount, err)
+		w.noteSubmitError(task.PikPakAccountID, err)
 		switch pikpak.KindOf(err) {
 		case pikpak.ErrorKindQuota, pikpak.ErrorKindStorage, pikpak.ErrorKindAuth, pikpak.ErrorKindCaptcha:
-			task.PikPakAccount = ""
+			task.PikPakAccountID = ""
 			task.PikPakTaskID = ""
 			task.PikPakRootFileID = ""
 			task.Status = domain.TaskWaitingPikPakAccount
@@ -212,7 +226,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task) error {
 			errors.New("PikPak returned an empty offline task ID"))
 	}
 
-	w.noteSubmitSuccess(task.PikPakAccount, !remote.Existing)
+	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
 	task.PikPakTaskID = remote.ID
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
@@ -247,7 +261,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 		return w.store.SaveTask(ctx, task, "pikpak.recover_submit", "missing persisted remote task ID")
 	}
 
-	remote, err := w.provider.GetOfflineTask(ctx, task.PikPakAccount, task.PikPakTaskID)
+	remote, err := w.provider.GetOfflineTask(ctx, task.PikPakAccountID, task.PikPakTaskID)
 	if err != nil {
 		return w.retry(ctx, task, domain.TaskPikPakRunning, domain.TaskPikPakFailed, err)
 	}
@@ -260,6 +274,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 
 	switch remote.Status {
 	case pikpak.PhaseComplete:
+		w.invalidateAccount(task.PikPakAccountID)
 		if task.PikPakRootFileID == "" {
 			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
 			task.Error = "PikPak task complete but root file ID is not available yet"
@@ -268,6 +283,7 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			task.NextAttemptAt = nil
 		}
 	case pikpak.PhaseError:
+		w.invalidateAccount(task.PikPakAccountID)
 		task.Status = domain.TaskPikPakFailed
 		task.NextAttemptAt = nil
 		task.Error = nonEmpty(remote.Error, "PikPak offline task failed")
@@ -294,7 +310,7 @@ func (w *Worker) beginResolve(ctx context.Context, task *domain.Task) error {
 }
 
 func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
-	files, err := w.provider.ListFiles(ctx, task.PikPakAccount, task.PikPakRootFileID)
+	files, err := w.provider.ListFiles(ctx, task.PikPakAccountID, task.PikPakRootFileID)
 	if err != nil {
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
@@ -350,28 +366,36 @@ func (w *Worker) retry(
 	return w.store.SaveTask(ctx, task, "pikpak.retry", cause.Error())
 }
 
-func (w *Worker) runtime(name string) *accountRuntime {
-	runtime, ok := w.accounts[name]
+func (w *Worker) runtime(id string) *accountRuntime {
+	runtime, ok := w.accounts[id]
 	if !ok {
 		runtime = &accountRuntime{}
-		w.accounts[name] = runtime
+		w.accounts[id] = runtime
 	}
 	return runtime
 }
 
-func (w *Worker) noteAccountSuccess(name string, snapshot pikpak.AccountSnapshot, now time.Time) {
-	runtime := w.runtime(name)
+func (w *Worker) releaseReservation(id string) {
+	runtime := w.runtime(id)
+	if runtime.reserved > 0 {
+		runtime.reserved--
+	}
+}
+
+func (w *Worker) noteAccountSuccess(id string, snapshot pikpak.AccountSnapshot, now time.Time) {
+	runtime := w.runtime(id)
 	runtime.snapshot = snapshot
+	runtime.snapshot.ID = id
 	runtime.has = true
 	runtime.refreshed = now
 	runtime.failures = 0
 	runtime.cooldown = time.Time{}
 }
 
-func (w *Worker) noteAccountFailure(name string, snapshot pikpak.AccountSnapshot, err error, now time.Time) {
-	runtime := w.runtime(name)
+func (w *Worker) noteAccountFailure(id string, snapshot pikpak.AccountSnapshot, err error, now time.Time) {
+	runtime := w.runtime(id)
 	runtime.snapshot = snapshot
-	runtime.snapshot.Name = name
+	runtime.snapshot.ID = id
 	runtime.snapshot.Healthy = false
 	runtime.has = true
 	runtime.refreshed = now
@@ -383,8 +407,8 @@ func (w *Worker) noteAccountFailure(name string, snapshot pikpak.AccountSnapshot
 	}
 }
 
-func (w *Worker) noteSubmitError(name string, err error) {
-	runtime := w.runtime(name)
+func (w *Worker) noteSubmitError(id string, err error) {
+	runtime := w.runtime(id)
 	switch pikpak.KindOf(err) {
 	case pikpak.ErrorKindQuota:
 		runtime.snapshot.QuotaRemaining = 0
@@ -402,16 +426,20 @@ func (w *Worker) noteSubmitError(name string, err error) {
 	}
 }
 
-func (w *Worker) noteSubmitSuccess(name string, created bool) {
-	runtime := w.runtime(name)
-	if created {
-		if runtime.snapshot.QuotaRemaining > 0 {
-			runtime.snapshot.QuotaRemaining--
-		}
+func (w *Worker) noteSubmitSuccess(id string, active bool) {
+	runtime := w.runtime(id)
+	if runtime.snapshot.QuotaRemaining > 0 {
+		runtime.snapshot.QuotaRemaining--
+	}
+	if active {
 		runtime.snapshot.ActiveJobs++
 	}
 	runtime.snapshot.LastUsedAt = time.Now().UTC()
 	runtime.failures = 0
+}
+
+func (w *Worker) invalidateAccount(id string) {
+	w.runtime(id).refreshed = time.Time{}
 }
 
 func ParseByteSize(input string) (int64, error) {

@@ -2,19 +2,15 @@ package pikpak
 
 import "testing"
 
-func TestFindOfflineTaskBySource(t *testing.T) {
-	tasks := []offlineTaskAPI{
-		{ID: "other"},
-		{ID: "expected", Phase: PhaseRunning},
+func TestMapOfflineTask(t *testing.T) {
+	task := offlineTaskAPI{
+		ID:      "remote-1",
+		FileID:  "file-1",
+		Phase:   PhaseRunning,
+		Message: "Saving",
 	}
-	tasks[0].Params.URL = "https://example.invalid/other"
-	tasks[1].Params.URL = " magnet:?xt=urn:btih:ABC "
-
-	got, ok := findOfflineTaskBySource(tasks, "magnet:?xt=urn:btih:ABC")
-	if !ok {
-		t.Fatal("expected existing task")
-	}
-	if got.ID != "expected" {
-		t.Fatalf("want expected, got %s", got.ID)
+	got := mapOfflineTask(task)
+	if got.ID != task.ID || got.RootFileID != task.FileID || got.Status != task.Phase || got.Error != task.Message {
+		t.Fatalf("unexpected mapped task: %#v", got)
 	}
 }

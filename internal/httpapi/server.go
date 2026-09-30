@@ -29,9 +29,11 @@ type taskStore interface {
 type runtimeManager interface {
 	Configured() bool
 	ApplySetup(context.Context, *config.Config) error
-	AccountNames() []string
+	AccountIDs() []string
 	RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error)
 	Aria2Snapshots(context.Context) []aria2.InstanceSnapshot
+	DownloadTargets() []config.DownloadTarget
+	ResolveTarget(string) (config.DownloadTarget, error)
 }
 
 type Option func(*Server)
@@ -66,6 +68,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/setup", s.setupStatus)
 	s.mux.HandleFunc("POST /api/v1/setup", s.completeSetup)
 	s.mux.HandleFunc("GET /api/v1/status", s.runtimeStatus)
+	s.mux.HandleFunc("GET /api/v1/targets", s.listTargets)
 	s.mux.HandleFunc("POST /api/v1/tasks", s.createTask)
 	s.mux.HandleFunc("POST /api/v1/tasks/text", s.createTaskText)
 	s.mux.HandleFunc("GET /api/v1/tasks", s.listTasks)
@@ -90,21 +93,30 @@ func (s *Server) setupStatus(w http.ResponseWriter, _ *http.Request) {
 type setupRequest struct {
 	PikPakAccounts []setupPikPakAccount `json:"pikpak_accounts"`
 	Aria2Instances []setupAria2Instance `json:"aria2_instances"`
+	Targets        []setupTarget        `json:"targets"`
 }
 
 type setupPikPakAccount struct {
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Username string `json:"username"`
 	Password string `json:"password"`
+	MaxJobs  int    `json:"max_jobs"`
 }
 
 type setupAria2Instance struct {
-	Name      string  `json:"name"`
-	URL       string  `json:"url"`
-	Secret    string  `json:"secret"`
-	Dir       string  `json:"dir"`
-	MaxActive int     `json:"max_active"`
-	Weight    float64 `json:"weight"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	URL       string `json:"url"`
+	Secret    string `json:"secret"`
+}
+
+type setupTarget struct {
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Aria2InstanceID string `json:"aria2_instance"`
+	Dir             string `json:"dir"`
+	Default         bool   `json:"default"`
 }
 
 func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
@@ -124,40 +136,49 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if len(req.PikPakAccounts) > 50 || len(req.Aria2Instances) > 50 {
-		writeError(w, http.StatusBadRequest, "too many accounts or aria2 instances")
+	if len(req.PikPakAccounts) > 50 || len(req.Aria2Instances) > 50 || len(req.Targets) > 100 {
+		writeError(w, http.StatusBadRequest, "too many accounts, aria2 instances or targets")
 		return
 	}
 
 	cfg := config.Default()
 	cfg.PikPak.Accounts = make([]config.PikPakAccount, 0, len(req.PikPakAccounts))
 	for _, account := range req.PikPakAccounts {
+		maxJobs := account.MaxJobs
+		if maxJobs == 0 {
+			maxJobs = 2
+		}
 		cfg.PikPak.Accounts = append(cfg.PikPak.Accounts, config.PikPakAccount{
+			ID:       strings.TrimSpace(account.ID),
 			Name:     strings.TrimSpace(account.Name),
 			Username: strings.TrimSpace(account.Username),
 			Password: account.Password,
+			MaxJobs:  maxJobs,
 		})
 	}
+
 	cfg.Aria2.Instances = make([]config.Aria2Instance, 0, len(req.Aria2Instances))
 	for _, instance := range req.Aria2Instances {
-		maxActive := instance.MaxActive
-		if maxActive == 0 {
-			maxActive = 4
-		}
-		weight := instance.Weight
-		if weight == 0 {
-			weight = 10
-		}
 		cfg.Aria2.Instances = append(cfg.Aria2.Instances, config.Aria2Instance{
+			ID:        strings.TrimSpace(instance.ID),
 			Name:      strings.TrimSpace(instance.Name),
 			URL:       strings.TrimSpace(instance.URL),
 			Secret:    instance.Secret,
-			Dir:       strings.TrimSpace(instance.Dir),
-			MaxActive: maxActive,
-			Weight:    weight,
 		})
 	}
-	if err := config.ValidateSetup(cfg); err != nil {
+
+	cfg.Targets = make([]config.DownloadTarget, 0, len(req.Targets))
+	for _, target := range req.Targets {
+		cfg.Targets = append(cfg.Targets, config.DownloadTarget{
+			ID:              strings.TrimSpace(target.ID),
+			Name:            strings.TrimSpace(target.Name),
+			Aria2InstanceID: strings.TrimSpace(target.Aria2InstanceID),
+			Dir:             strings.TrimSpace(target.Dir),
+			Default:         target.Default,
+		})
+	}
+
+	if err := config.Validate(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -179,6 +200,7 @@ type createTaskRequest struct {
 	URL    string `json:"url"`
 	Magnet string `json:"magnet"`
 	Hash   string `json:"hash"`
+	Target string `json:"target"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -201,7 +223,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if input == "" {
 		input = req.Hash
 	}
-	s.createFromSource(w, r, input)
+	s.createFromSource(w, r, input, strings.TrimSpace(req.Target))
 }
 
 func (s *Server) createTaskText(w http.ResponseWriter, r *http.Request) {
@@ -215,10 +237,20 @@ func (s *Server) createTaskText(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	s.createFromSource(w, r, string(body))
+	s.createFromSource(w, r, string(body), "")
 }
 
-func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input string) {
+func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input, targetID string) {
+	if s.runtime == nil {
+		writeError(w, http.StatusServiceUnavailable, "runtime is unavailable")
+		return
+	}
+	target, err := s.runtime.ResolveTarget(targetID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	n, err := domain.NormalizeSource(input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -231,13 +263,17 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input 
 	}
 	now := time.Now().UTC()
 	task := domain.Task{
-		ID:         id,
-		Source:     n.Source,
-		SourceType: n.SourceType,
-		SourceKey:  n.SourceKey,
-		Status:     domain.TaskQueued,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:              id,
+		Source:          n.Source,
+		SourceType:      n.SourceType,
+		SourceKey:       n.SourceKey,
+		TargetID:        target.ID,
+		TargetName:      target.Name,
+		Aria2InstanceID: target.Aria2InstanceID,
+		DownloadDir:     target.Dir,
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if err := s.store.CreateTask(r.Context(), task); err != nil {
 		if errors.Is(err, store.ErrDuplicate) {
@@ -250,6 +286,7 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input 
 				"error":            "task already exists",
 				"existing_task_id": existing.ID,
 				"status":           existing.Status,
+				"target_id":        existing.TargetID,
 			})
 			return
 		}
@@ -257,6 +294,14 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input 
 		return
 	}
 	writeJSON(w, http.StatusCreated, task)
+}
+
+func (s *Server) listTargets(w http.ResponseWriter, _ *http.Request) {
+	if !s.configured() || s.runtime == nil {
+		writeJSON(w, http.StatusOK, map[string]any{"targets": []config.DownloadTarget{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"targets": s.runtime.DownloadTargets()})
 }
 
 func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +345,7 @@ func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 type accountStatusView struct {
+	ID             string    `json:"id"`
 	Name           string    `json:"name"`
 	Enabled        bool      `json:"enabled"`
 	Healthy        bool      `json:"healthy"`
@@ -314,14 +360,13 @@ type accountStatusView struct {
 }
 
 type aria2StatusView struct {
-	Name      string  `json:"name"`
-	Enabled   bool    `json:"enabled"`
-	Healthy   bool    `json:"healthy"`
-	Active    int     `json:"active"`
-	Waiting   int     `json:"waiting"`
-	MaxActive int     `json:"max_active"`
-	Weight    float64 `json:"weight"`
-	Error     string  `json:"error,omitempty"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Enabled   bool   `json:"enabled"`
+	Healthy   bool   `json:"healthy"`
+	Active    int    `json:"active"`
+	Waiting   int    `json:"waiting"`
+	Error     string `json:"error,omitempty"`
 }
 
 func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
@@ -338,18 +383,19 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	accountNames := s.runtime.AccountNames()
-	accounts := make([]accountStatusView, len(accountNames))
+	accountIDs := s.runtime.AccountIDs()
+	accounts := make([]accountStatusView, len(accountIDs))
 	type result struct {
 		index int
 		view  accountStatusView
 	}
-	results := make(chan result, len(accountNames))
-	for i, name := range accountNames {
-		go func(i int, name string) {
-			snapshot, err := s.runtime.RefreshAccount(ctx, name)
+	results := make(chan result, len(accountIDs))
+	for i, id := range accountIDs {
+		go func(i int, id string) {
+			snapshot, err := s.runtime.RefreshAccount(ctx, id)
 			view := accountStatusView{
-				Name:           name,
+				ID:             snapshot.ID,
+				Name:           snapshot.Name,
 				Enabled:        snapshot.Enabled,
 				Healthy:        snapshot.Healthy,
 				QuotaRemaining: snapshot.QuotaRemaining,
@@ -360,13 +406,16 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 				State:          snapshot.State,
 				CooldownUntil:  snapshot.CooldownUntil,
 			}
+			if view.ID == "" {
+				view.ID = id
+			}
 			if err != nil {
 				view.Error = err.Error()
 			}
 			results <- result{index: i, view: view}
-		}(i, name)
+		}(i, id)
 	}
-	for remaining := len(accountNames); remaining > 0; remaining-- {
+	for remaining := len(accountIDs); remaining > 0; remaining-- {
 		select {
 		case item := <-results:
 			accounts[item.index] = item.view
@@ -375,9 +424,9 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	for i := range accounts {
-		if accounts[i].Name == "" {
+		if accounts[i].ID == "" {
 			accounts[i] = accountStatusView{
-				Name:  accountNames[i],
+				ID:    accountIDs[i],
 				State: "TIMEOUT",
 				Error: "status refresh timed out",
 			}
@@ -387,13 +436,12 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 	var instances []aria2StatusView
 	for _, snapshot := range s.runtime.Aria2Snapshots(ctx) {
 		instances = append(instances, aria2StatusView{
+			ID:        snapshot.ID,
 			Name:      snapshot.Name,
 			Enabled:   snapshot.Enabled,
 			Healthy:   snapshot.Healthy,
 			Active:    snapshot.Active,
 			Waiting:   snapshot.Waiting,
-			MaxActive: snapshot.MaxActive,
-			Weight:    snapshot.Weight,
 			Error:     snapshot.Error,
 		})
 	}

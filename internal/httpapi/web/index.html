@@ -15,17 +15,14 @@
         <div>
           <span class="eyebrow">FIRST RUN</span>
           <h1>设置 PikPak Bridge</h1>
-          <p>配置只需完成一次，保存后立即开始工作。</p>
+          <p>账号池负责自动选择离线账号，Download Target 决定最终下载位置。</p>
         </div>
       </div>
 
       <form id="setupForm" class="setup-form">
         <section class="card setup-card">
           <div class="section-head">
-            <div>
-              <span class="eyebrow">PIKPAK</span>
-              <h2>PikPak 账号</h2>
-            </div>
+            <div><span class="eyebrow">PIKPAK</span><h2>PikPak 账号池</h2></div>
             <button id="addAccountBtn" class="secondary-btn" type="button">+ 添加账号</button>
           </div>
           <div id="setupAccounts" class="setup-list"></div>
@@ -33,19 +30,24 @@
 
         <section class="card setup-card">
           <div class="section-head">
-            <div>
-              <span class="eyebrow">ARIA2</span>
-              <h2>aria2 下载节点</h2>
-            </div>
-            <button id="addAria2Btn" class="secondary-btn" type="button">+ 添加节点</button>
+            <div><span class="eyebrow">ARIA2</span><h2>aria2 实例</h2></div>
+            <button id="addAria2Btn" class="secondary-btn" type="button">+ 添加实例</button>
           </div>
           <div id="setupAria2" class="setup-list"></div>
+        </section>
+
+        <section class="card setup-card">
+          <div class="section-head">
+            <div><span class="eyebrow">TARGETS</span><h2>Download Targets</h2></div>
+            <button id="addTargetBtn" class="secondary-btn" type="button">+ 添加目标</button>
+          </div>
+          <div id="setupTargets" class="setup-list"></div>
         </section>
 
         <div class="setup-actions">
           <div>
             <strong>配置将保存到 /data/config.yaml</strong>
-            <span>账号密码和 RPC secret 不会回传到浏览器。</span>
+            <span>开发阶段为破坏性配置模型，不兼容旧 config/database。</span>
           </div>
           <button id="setupSubmitBtn" class="primary-btn" type="submit">
             <span>保存并开始使用</span><span aria-hidden="true">→</span>
@@ -59,10 +61,7 @@
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark"><span></span><span></span></div>
-        <div>
-          <h1>PikPak Bridge</h1>
-          <p>离线下载调度器</p>
-        </div>
+        <div><h1>PikPak Bridge</h1><p>离线下载调度器</p></div>
       </div>
       <div class="top-actions">
         <div id="healthBadge" class="health-badge"><span class="dot"></span><span>连接中</span></div>
@@ -75,12 +74,16 @@
         <div class="submit-copy">
           <span class="eyebrow">NEW TASK</span>
           <h2>添加下载任务</h2>
-          <p>支持 Magnet、HTTP/HTTPS、ED2K 和 40 位 BTIH。</p>
+          <p>PikPak 账号由系统自动选择；你只需要指定最终 Download Target。</p>
         </div>
         <form id="taskForm" class="submit-form">
           <textarea id="sourceInput" rows="3" spellcheck="false" placeholder="粘贴下载链接或磁链…"></textarea>
+          <div class="target-picker">
+            <label for="targetSelect">下载目标</label>
+            <select id="targetSelect" required></select>
+          </div>
           <div class="submit-footer">
-            <span id="submitHint">任务会自动选择可用 PikPak 账号和 aria2 实例。</span>
+            <span id="submitHint">Target 会固定 aria2 实例和目的目录，任务创建后不会自动改变。</span>
             <button id="submitBtn" class="primary-btn" type="submit">
               <span>开始任务</span><span aria-hidden="true">→</span>
             </button>
@@ -103,7 +106,7 @@
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>状态</th><th>来源</th><th>进度</th><th>PikPak</th><th>aria2</th><th>更新时间</th></tr></thead>
+              <thead><tr><th>状态</th><th>来源</th><th>进度</th><th>PikPak</th><th>Target</th><th>更新时间</th></tr></thead>
               <tbody id="taskRows"><tr><td colspan="6" class="empty">正在加载任务…</td></tr></tbody>
             </table>
           </div>
@@ -124,6 +127,14 @@
               <span id="aria2Count" class="counter">0</span>
             </div>
             <div id="aria2List" class="resource-list"><div class="empty-block">正在获取节点状态…</div></div>
+          </section>
+
+          <section class="card">
+            <div class="section-head">
+              <div><span class="eyebrow">TARGETS</span><h2>下载目标</h2></div>
+              <span id="targetCount" class="counter">0</span>
+            </div>
+            <div id="targetList" class="resource-list"><div class="empty-block">正在获取下载目标…</div></div>
           </section>
         </aside>
       </div>

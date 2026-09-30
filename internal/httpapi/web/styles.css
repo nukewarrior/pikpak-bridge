@@ -16,7 +16,7 @@
 }
 * { box-sizing: border-box; }
 body { margin:0; background: radial-gradient(circle at 15% 0%, #13231f 0, transparent 28rem), var(--bg); color:var(--text); min-height:100vh; }
-button, textarea { font: inherit; }
+button, textarea, input, select { font: inherit; }
 button { cursor:pointer; }
 .shell { width:min(1480px, calc(100% - 40px)); margin:0 auto; padding-bottom:60px; }
 .topbar { height:84px; display:flex; align-items:center; justify-content:space-between; }
@@ -40,6 +40,12 @@ main { display:grid; gap:18px; }
 h2 { font-size:17px; margin:0; letter-spacing:-.02em; }
 .submit-copy p { margin:8px 0 0; color:var(--muted); font-size:13px; line-height:1.6; }
 .submit-form { display:grid; gap:10px; }
+.target-picker { display:grid; grid-template-columns:auto minmax(180px, 320px); gap:10px; align-items:center; justify-content:end; }
+.target-picker label { color:var(--muted); font-size:11px; }
+.target-picker select { width:100%; border:1px solid #303641; border-radius:10px; padding:9px 11px; background:#0d1015; color:var(--text); outline:none; }
+.target-picker select:focus { border-color:#4f8a77; box-shadow:0 0 0 3px rgba(110,231,183,.07); }
+.checkbox-row { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; }
+.checkbox-row input { width:auto; }
 textarea { resize:vertical; min-height:82px; width:100%; border:1px solid #303641; border-radius:12px; padding:14px 15px; color:var(--text); background:#0d1015; outline:none; line-height:1.5; }
 textarea:focus { border-color:#4f8a77; box-shadow:0 0 0 3px rgba(110,231,183,.07); }
 .submit-footer { display:flex; align-items:center; justify-content:space-between; gap:20px; }
@@ -114,6 +120,7 @@ dialog::backdrop { background:rgba(3,5,8,.72); backdrop-filter:blur(4px); }
   .submit-card { grid-template-columns:1fr; gap:16px; }
 }
 @media (max-width: 680px) {
+  .target-picker { grid-template-columns:1fr; justify-content:stretch; }
   .shell { width:min(100% - 20px, 1480px); }
   .topbar { height:72px; }
   .stats-grid { grid-template-columns:1fr 1fr; }
@@ -146,8 +153,8 @@ dialog::backdrop { background:rgba(3,5,8,.72); backdrop-filter:blur(4px); }
 .field { display:grid; gap:6px; }
 .field.wide { grid-column:1 / -1; }
 .field label { color:#8f99aa; font-size:10px; font-weight:650; letter-spacing:.03em; }
-.field input { width:100%; border:1px solid #303641; border-radius:10px; padding:10px 12px; background:#0d1015; color:var(--text); outline:none; }
-.field input:focus { border-color:#4f8a77; box-shadow:0 0 0 3px rgba(110,231,183,.07); }
+.field input, .field select { width:100%; border:1px solid #303641; border-radius:10px; padding:10px 12px; background:#0d1015; color:var(--text); outline:none; }
+.field input:focus, .field select:focus { border-color:#4f8a77; box-shadow:0 0 0 3px rgba(110,231,183,.07); }
 .field .hint { color:#606a79; font-size:9px; line-height:1.45; }
 .secondary-btn { border:1px solid #344039; border-radius:9px; background:#122019; color:#9fe7ca; padding:7px 10px; font-size:11px; font-weight:650; }
 .secondary-btn:hover { border-color:#4d6d61; background:#16271f; }

@@ -139,7 +139,7 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 		return w.complete(ctx, task, fmt.Sprintf("verified %d files, %d bytes; cleanup disabled", len(downloads), total))
 	}
 
-	if task.PikPakAccount == "" || task.PikPakRootFileID == "" {
+	if task.PikPakAccountID == "" || task.PikPakRootFileID == "" {
 		return w.failVerify(ctx, task, errors.New("cleanup enabled but PikPak account/root file ID is missing"))
 	}
 	task.Status = domain.TaskReadyToCleanup
@@ -149,7 +149,7 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 }
 
 func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
-	if task.PikPakAccount == "" || task.PikPakRootFileID == "" {
+	if task.PikPakAccountID == "" || task.PikPakRootFileID == "" {
 		task.Status = domain.TaskCleanupFailed
 		task.Error = "refusing cleanup without exact PikPak account/root file ID"
 		task.NextAttemptAt = nil
@@ -162,7 +162,7 @@ func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {
 }
 
 func (w *Finalizer) cleanup(ctx context.Context, task *domain.Task) error {
-	if err := w.provider.DeletePermanently(ctx, task.PikPakAccount, task.PikPakRootFileID); err != nil {
+	if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
 		task.RetryCount++
 		task.Error = err.Error()
 		if task.RetryCount >= w.options.MaxRetry {

@@ -1,46 +1,116 @@
 # pikpak-bridge
 
-A lightweight scheduler that bridges PikPak offline downloads to one or more aria2 instances.
+A lightweight bridge that uses a pool of PikPak accounts for offline downloads and routes completed files to explicit aria2 download targets.
 
-## Goal
-
-The target workflow is:
+## Workflow
 
 ~~~text
 URL / magnet / ED2K
         ↓
-choose an eligible PikPak account
+choose a Download Target
+        ↓
+automatically select an eligible PikPak account
         ↓
 PikPak offline download
         ↓
 resolve completed remote files
         ↓
-choose an aria2 instance
-        ↓
-aria2 downloads the files
+send files to the Target's aria2 instance + destination directory
         ↓
 verify completion and file sizes
         ↓
 permanently delete only the PikPak files created by this task
 ~~~
 
-The design is intentionally built around multi-account PikPak quota scheduling, multi-instance aria2 scheduling, durable SQLite task state, restart recovery, and conservative cleanup.
+The two scheduling decisions are intentionally different:
+
+- **PikPak account:** selected automatically from the account pool.
+- **Download Target:** selected by the user and never silently changed.
+
+## Core model
+
+### PikPak account pool
+
+All enabled PikPak accounts form one implicit pool. Each account has a stable ID and its own concurrency limit.
+
+Eligible accounts are filtered by health, remaining offline quota, cooldown, active jobs and free storage. They are then ordered by:
+
+1. lower effective load ratio (`active_jobs / max_jobs`)
+2. more remaining offline quota
+3. least recently used
+4. more free storage
+5. stable account ID
+
+The worker reserves account capacity before submission so a burst of queued tasks does not all select the same stale account snapshot.
+
+Submission recovery deliberately prioritizes ownership safety. The bridge never adopts an arbitrary existing PikPak offline task merely because its source URL matches. If the process dies in the narrow window after PikPak accepts a submission but before the returned task ID is persisted, the retry may create an extra PikPak task instead of taking ownership of an unrelated one. Persisted PikPak task IDs resume normally.
+
+### aria2 instances
+
+An aria2 instance represents only an RPC endpoint. aria2 itself owns active/waiting queue and concurrency control:
+
+~~~yaml
+aria2:
+  instances:
+    - id: unraid
+      name: Unraid
+      url: http://192.168.1.10:6800/jsonrpc
+      secret: ...
+~~~
+
+aria2 instances are not automatically selected by a scheduler.
+
+### Download Targets
+
+A Download Target represents the user's final destination:
+
+~~~yaml
+targets:
+  - id: movies
+    name: 电影
+    aria2_instance: unraid
+    dir: /downloads/movies
+    default: true
+
+  - id: tv
+    name: 电视剧
+    aria2_instance: unraid
+    dir: /downloads/tv
+~~~
+
+Multiple targets may reuse the same aria2 instance.
+
+When a task is created, the target ID, target name, aria2 instance ID and destination directory are snapshotted onto the task. Later configuration changes therefore cannot silently move an existing task.
+
+If the selected aria2 instance is offline, the task stays in `WAITING_ARIA2`. Once it is healthy, the files are submitted and aria2 handles its own active/waiting queue. The bridge does **not** fail over to another target.
 
 ## Current status
 
-The core v1 pipeline is implemented:
+The core pipeline includes:
 
-- multi-account PikPak scheduling with quota/storage checks
-- durable offline-task state machine and restart recovery
-- multi-instance aria2 scheduling with task affinity
+- multi-account PikPak pool scheduling
+- per-account concurrency limits and cooldowns
+- durable offline-task state and restart recovery
+- explicit Download Targets
+- multi-instance aria2 registry
 - persistent per-file aria2 progress and deterministic GID recovery
 - final size verification and precise PikPak cleanup
 - embedded Web UI
 - Docker/Compose deployment and multi-architecture GHCR images
 
-## Docker image
+## Development status
 
-Prebuilt multi-architecture images are published to GitHub Container Registry:
+The project is still under active development. Configuration and SQLite schemas may change without migration support.
+
+When testing a breaking development build, remove the old configuration and database before starting the new build:
+
+~~~bash
+rm -f ./data/config.yaml ./data/pikpak-bridge.db ./data/pikpak-bridge.db-shm ./data/pikpak-bridge.db-wal
+~~~
+
+PikPak session files under `./data/sessions` are separate.
+
+## Docker image
 
 ~~~text
 ghcr.io/nukewarrior/pikpak-bridge:latest
@@ -53,64 +123,70 @@ Supported platforms:
 
 ### First run
 
-No config file or environment variables are required for the initial setup.
-
 ~~~bash
 docker compose pull
 docker compose up -d
 ~~~
 
-Then open:
+Open:
 
 ~~~text
 http://<host>:8080/
 ~~~
 
-The first-run Web UI asks for:
+The first-run Web UI configures:
 
 - one or more PikPak accounts
-- one or more aria2 JSON-RPC endpoints
-- each aria2 download directory, concurrency and scheduler weight
+- one or more aria2 JSON-RPC instances
+- one or more Download Targets
 
-After saving, PikPak Bridge writes the complete configuration to:
+The configuration is saved to:
 
 ~~~text
 /data/config.yaml
 ~~~
 
-The file is created with mode `0600` inside the persistent `./data:/data` volume, and workers start immediately without restarting the container. Subsequent restarts load this saved configuration and go directly to the dashboard.
+## Test a development image
 
-To reset the first-run setup, stop the container and remove `./data/config.yaml`. The SQLite database and sessions are separate files under `./data`; removing only `config.yaml` does not erase task history.
+The Docker workflow supports isolated manual tags for development builds without updating `latest`.
 
-Each master build publishes both `latest` and a commit-pinned `sha-xxxxxxx` image tag. Git tags such as `v0.1.0` are also published with the same image tag.
+In GitHub Actions, open **Docker → Run workflow**, select the development branch, and set an explicit tag such as:
 
-## Web UI
+~~~text
+pr-12
+~~~
 
-The Web UI is embedded into the Go binary. No Node.js build or separate frontend container is required.
+Then deploy that image with the same Compose file. Image, host port and data directory are overrideable, so a development build can run beside the stable instance without touching its database or configuration:
 
-The dashboard provides:
+~~~bash
+export PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12
+export PIKPAK_BRIDGE_PORT=8081
+export PIKPAK_BRIDGE_DATA=./data-pr12
 
-- first-run setup for PikPak accounts and aria2 instances
-- task submission for Magnet / HTTP(S) / ED2K / BTIH
-- live task states and aria2 download progress
-- task details including PikPak IDs and aria2 GIDs
-- PikPak account health, remaining offline quota, active jobs, and free storage
-- aria2 instance health, active/waiting jobs, capacity, and scheduler weight
+docker compose -p pikpak-bridge-pr12 pull
+docker compose -p pikpak-bridge-pr12 up -d
+~~~
 
-The task list refreshes automatically. Runtime account/node status refreshes less frequently to avoid unnecessary remote API traffic.
+Open `http://<host>:8081/` and initialize the development instance independently.
+
+During the current development cycle, pushes to `master` and `refactor/download-targets` publish `latest`, so the branch can be tested with the normal Compose workflow. Manual builds can still publish an explicit tag plus the commit `sha-xxxxxxx` tag. The fixed Compose `container_name` is intentionally omitted so multiple project names can coexist.
 
 ## API
 
-Create a task:
+Create a task for a target:
 
 ~~~bash
-curl -X POST http://localhost:8080/api/v1/tasks   -H 'Content-Type: application/json'   -d '{"url":"magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567"}'
+curl -X POST http://localhost:8080/api/v1/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567","target":"movies"}'
 ~~~
 
-Plain-text submission is also supported:
+If a default target exists, `target` may be omitted.
 
-~~~bash
-curl -X POST --data 'magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567'   http://localhost:8080/api/v1/tasks/text
+List targets:
+
+~~~text
+GET /api/v1/targets
 ~~~
 
 Query tasks:
@@ -118,40 +194,14 @@ Query tasks:
 ~~~text
 GET /api/v1/tasks
 GET /api/v1/tasks/{id}
+GET /api/v1/tasks/{id}/downloads
 GET /healthz
 ~~~
 
-Duplicate BTIH values return HTTP 409 with the existing task ID.
-
-## Configuration
-
-~~~bash
-cp config.example.yaml config.yaml
-~~~
-
-Secrets can be injected with environment variables rather than committed to YAML.
-
-See `config.example.yaml`.
-
-## Scheduling rules
-
-PikPak accounts are filtered by enabled/healthy state, remaining offline quota, cooldown, per-account active-job limit, and known free space. Eligible accounts are ordered by:
-
-1. more remaining quota
-2. fewer active offline jobs
-3. least recently used
-4. stable account name tie-break
-
-aria2 instances are filtered by enabled/healthy state and capacity. The current score is:
-
-~~~text
-((active + 0.5 * waiting) / max_active) / weight
-~~~
-
-The lowest score wins. Task-level aria2 affinity is the default so one task's files stay on the same destination.
+A normalized source is globally unique while its task exists. This preserves the invariant that one bridge task owns one PikPak offline task/root and is the only task allowed to clean it up.
 
 ## Safety
 
-Automatic cleanup must only ever delete the exact PikPak root/file IDs recorded for a bridge task. The project will not implement "clean account" or "delete everything" behavior.
+Automatic cleanup only deletes the exact PikPak root/file IDs recorded for a bridge task.
 
-PikPak deletion will only run after aria2 reports completion and configured verification succeeds.
+PikPak deletion runs only after aria2 reports completion and configured verification succeeds.

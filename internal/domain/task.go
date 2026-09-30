@@ -25,21 +25,26 @@ const (
 )
 
 type Task struct {
-	ID               string     `json:"id"`
-	Source            string     `json:"source"`
-	SourceType        string     `json:"source_type"`
-	SourceKey         string     `json:"-"`
-	Status            TaskStatus `json:"status"`
-	PikPakAccount     string     `json:"pikpak_account,omitempty"`
-	PikPakTaskID      string     `json:"pikpak_task_id,omitempty"`
-	PikPakRootFileID  string     `json:"pikpak_root_file_id,omitempty"`
-	Aria2Instance     string     `json:"aria2_instance,omitempty"`
-	RetryCount        int        `json:"retry_count"`
-	NextAttemptAt     *time.Time `json:"next_attempt_at,omitempty"`
-	Error             string     `json:"error,omitempty"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	CompletedAt       *time.Time `json:"completed_at,omitempty"`
+	ID              string     `json:"id"`
+	Source          string     `json:"source"`
+	SourceType      string     `json:"source_type"`
+	SourceKey       string     `json:"-"`
+	TargetID        string     `json:"target_id"`
+	TargetName      string     `json:"target_name"`
+	Aria2InstanceID string     `json:"aria2_instance_id"`
+	DownloadDir     string     `json:"download_dir"`
+	Status          TaskStatus `json:"status"`
+
+	PikPakAccountID  string `json:"pikpak_account_id,omitempty"`
+	PikPakTaskID     string `json:"pikpak_task_id,omitempty"`
+	PikPakRootFileID string `json:"pikpak_root_file_id,omitempty"`
+
+	RetryCount    int        `json:"retry_count"`
+	NextAttemptAt *time.Time `json:"next_attempt_at,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
 }
 
 type RemoteFile struct {
@@ -65,18 +70,18 @@ const (
 )
 
 type Download struct {
-	TaskID          string         `json:"task_id"`
-	PikPakFileID    string         `json:"pikpak_file_id"`
-	Aria2Instance   string         `json:"aria2_instance"`
-	Aria2GID        string         `json:"aria2_gid"`
-	Status          DownloadStatus `json:"status"`
-	RelativePath    string         `json:"relative_path"`
-	ExpectedSize    int64          `json:"expected_size"`
-	TotalLength     int64          `json:"total_length"`
-	CompletedLength int64          `json:"completed_length"`
-	RetryCount      int            `json:"retry_count"`
-	NextAttemptAt   *time.Time     `json:"next_attempt_at,omitempty"`
-	LastError       string         `json:"last_error,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	TaskID           string         `json:"task_id"`
+	PikPakFileID     string         `json:"pikpak_file_id"`
+	Aria2InstanceID  string         `json:"aria2_instance_id"`
+	Aria2GID         string         `json:"aria2_gid"`
+	Status           DownloadStatus `json:"status"`
+	RelativePath     string         `json:"relative_path"`
+	ExpectedSize     int64          `json:"expected_size"`
+	TotalLength      int64          `json:"total_length"`
+	CompletedLength  int64          `json:"completed_length"`
+	RetryCount       int            `json:"retry_count"`
+	NextAttemptAt    *time.Time     `json:"next_attempt_at,omitempty"`
+	LastError        string         `json:"last_error,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }

@@ -12,90 +12,65 @@ import (
 )
 
 type InstanceSnapshot struct {
+	ID        string
 	Name      string
 	Enabled   bool
 	Healthy   bool
 	Active    int
 	Waiting   int
-	MaxActive int
-	Weight    float64
 	Error     string
 }
 
 type Backend interface {
 	Snapshots(ctx context.Context) []InstanceSnapshot
-	Add(ctx context.Context, instance, uri, gid, relativePath string) (string, error)
-	TellStatus(ctx context.Context, instance, gid string) (Status, error)
-	Forget(ctx context.Context, instance, gid string) error
+	Snapshot(ctx context.Context, instanceID string) (InstanceSnapshot, error)
+	Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error)
+	TellStatus(ctx context.Context, instanceID, gid string) (Status, error)
+	Forget(ctx context.Context, instanceID, gid string) error
 }
 
-type poolInstance struct {
+type registryInstance struct {
+	id        string
 	name      string
-	dir       string
-	maxActive int
-	weight    float64
 	enabled   bool
 	client    *Client
 }
 
-type Pool struct {
-	instances map[string]*poolInstance
+type Registry struct {
+	instances map[string]*registryInstance
 	order     []string
 }
 
-func NewPool(configs []config.Aria2Instance) *Pool {
-	pool := &Pool{
-		instances: make(map[string]*poolInstance, len(configs)),
+func NewRegistry(configs []config.Aria2Instance) *Registry {
+	registry := &Registry{
+		instances: make(map[string]*registryInstance, len(configs)),
 		order:     make([]string, 0, len(configs)),
 	}
 	for _, cfg := range configs {
-		enabled := cfg.Enabled == nil || *cfg.Enabled
-		weight := cfg.Weight
-		if weight <= 0 {
-			weight = 1
-		}
-		instance := &poolInstance{
+		instance := &registryInstance{
+			id:        cfg.ID,
 			name:      cfg.Name,
-			dir:       cfg.Dir,
-			maxActive: cfg.MaxActive,
-			weight:    weight,
-			enabled:   enabled,
+			enabled:   config.Enabled(cfg.Enabled),
 			client:    New(cfg.URL, cfg.Secret),
 		}
-		pool.instances[cfg.Name] = instance
-		pool.order = append(pool.order, cfg.Name)
+		registry.instances[cfg.ID] = instance
+		registry.order = append(registry.order, cfg.ID)
 	}
-	return pool
+	return registry
 }
 
-func (p *Pool) Snapshots(ctx context.Context) []InstanceSnapshot {
-	out := make([]InstanceSnapshot, len(p.order))
+func (r *Registry) Snapshots(ctx context.Context) []InstanceSnapshot {
+	out := make([]InstanceSnapshot, len(r.order))
 	var wg sync.WaitGroup
-	for i, name := range p.order {
-		i, name := i, name
+	for i, id := range r.order {
+		i, id := i, id
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			instance := p.instances[name]
-			snapshot := InstanceSnapshot{
-				Name:      instance.name,
-				Enabled:   instance.enabled,
-				MaxActive: instance.maxActive,
-				Weight:    instance.weight,
-			}
-			if !instance.enabled {
-				out[i] = snapshot
-				return
-			}
-			stat, err := instance.client.GetGlobalStat(ctx)
+			snapshot, err := r.Snapshot(ctx, id)
 			if err != nil {
 				snapshot.Error = err.Error()
-				out[i] = snapshot
-				return
 			}
-			snapshot.Active = parseCount(stat.NumActive)
-			snapshot.Waiting = parseCount(stat.NumWaiting)
-			snapshot.Healthy = true
 			out[i] = snapshot
 		}()
 	}
@@ -103,12 +78,36 @@ func (p *Pool) Snapshots(ctx context.Context) []InstanceSnapshot {
 	return out
 }
 
-func (p *Pool) Add(ctx context.Context, instanceName, uri, gid, relativePath string) (string, error) {
-	instance, err := p.get(instanceName)
+func (r *Registry) Snapshot(ctx context.Context, instanceID string) (InstanceSnapshot, error) {
+	instance, err := r.lookup(instanceID)
+	if err != nil {
+		return InstanceSnapshot{ID: instanceID}, err
+	}
+	snapshot := InstanceSnapshot{
+		ID:        instance.id,
+		Name:      instance.name,
+		Enabled:   instance.enabled,
+	}
+	if !instance.enabled {
+		return snapshot, nil
+	}
+	stat, err := instance.client.GetGlobalStat(ctx)
+	if err != nil {
+		snapshot.Error = err.Error()
+		return snapshot, err
+	}
+	snapshot.Active = parseCount(stat.NumActive)
+	snapshot.Waiting = parseCount(stat.NumWaiting)
+	snapshot.Healthy = true
+	return snapshot, nil
+}
+
+func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+	instance, err := r.enabled(instanceID)
 	if err != nil {
 		return "", err
 	}
-	dir, out, err := destination(instance.dir, relativePath)
+	dir, out, err := destination(baseDir, relativePath)
 	if err != nil {
 		return "", err
 	}
@@ -125,34 +124,45 @@ func (p *Pool) Add(ctx context.Context, instanceName, uri, gid, relativePath str
 	return instance.client.AddURIWithOptions(ctx, uri, options)
 }
 
-func (p *Pool) TellStatus(ctx context.Context, instanceName, gid string) (Status, error) {
-	instance, err := p.get(instanceName)
+func (r *Registry) TellStatus(ctx context.Context, instanceID, gid string) (Status, error) {
+	instance, err := r.enabled(instanceID)
 	if err != nil {
 		return Status{}, err
 	}
 	return instance.client.TellStatus(ctx, gid)
 }
 
-func (p *Pool) Forget(ctx context.Context, instanceName, gid string) error {
-	instance, err := p.get(instanceName)
+func (r *Registry) Forget(ctx context.Context, instanceID, gid string) error {
+	instance, err := r.enabled(instanceID)
 	if err != nil {
 		return err
 	}
 	return instance.client.RemoveDownloadResult(ctx, gid)
 }
 
-func (p *Pool) get(name string) (*poolInstance, error) {
-	instance, ok := p.instances[name]
+func (r *Registry) lookup(id string) (*registryInstance, error) {
+	instance, ok := r.instances[id]
 	if !ok {
-		return nil, fmt.Errorf("aria2 instance %q not configured", name)
+		return nil, fmt.Errorf("aria2 instance %q not configured", id)
+	}
+	return instance, nil
+}
+
+func (r *Registry) enabled(id string) (*registryInstance, error) {
+	instance, err := r.lookup(id)
+	if err != nil {
+		return nil, err
 	}
 	if !instance.enabled {
-		return nil, fmt.Errorf("aria2 instance %q is disabled", name)
+		return nil, fmt.Errorf("aria2 instance %q is disabled", id)
 	}
 	return instance, nil
 }
 
 func destination(base, relative string) (string, string, error) {
+	if strings.TrimSpace(base) == "" {
+		return "", "", fmt.Errorf("empty download target directory")
+	}
 	if strings.TrimSpace(relative) == "" {
 		return "", "", fmt.Errorf("empty relative download path")
 	}

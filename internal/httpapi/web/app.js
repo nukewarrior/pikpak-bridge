@@ -36,10 +36,12 @@ const FAILED = new Set(["PIKPAK_FAILED","ARIA2_FAILED","VERIFY_FAILED","CLEANUP_
 
 let taskRefreshBusy = false;
 let statusRefreshBusy = false;
+let targetsRefreshBusy = false;
 let dashboardStarted = false;
 let toastTimer;
 let accountSeq = 0;
 let aria2Seq = 0;
+let targetSeq = 0;
 
 function esc(value) {
   return String(value ?? "")
@@ -100,6 +102,7 @@ async function request(url, options) {
 function accountEntry(values={}) {
   accountSeq += 1;
   const index = accountSeq;
+  const id = values.id || "pp" + String(index).padStart(2,"0");
   const div = document.createElement("div");
   div.className = "setup-entry";
   div.dataset.kind = "account";
@@ -110,12 +113,20 @@ function accountEntry(values={}) {
     </div>
     <div class="setup-grid">
       <div class="field">
-        <label>名称</label>
-        <input data-field="name" value="${esc(values.name || "pp" + String(index).padStart(2,"0"))}" required>
+        <label>稳定 ID</label>
+        <input data-field="id" value="${esc(id)}" required>
+      </div>
+      <div class="field">
+        <label>显示名称</label>
+        <input data-field="name" value="${esc(values.name || id)}" required>
       </div>
       <div class="field">
         <label>账号</label>
         <input data-field="username" value="${esc(values.username || "")}" autocomplete="username" placeholder="邮箱或手机号" required>
+      </div>
+      <div class="field">
+        <label>最大并发离线任务</label>
+        <input data-field="max_jobs" type="number" min="1" max="20" value="${esc(values.max_jobs || 2)}" required>
       </div>
       <div class="field wide">
         <label>密码</label>
@@ -135,56 +146,137 @@ function accountEntry(values={}) {
 function aria2Entry(values={}) {
   aria2Seq += 1;
   const index = aria2Seq;
+  const id = values.id || (index === 1 ? "unraid" : "aria2-" + String(index).padStart(2,"0"));
   const div = document.createElement("div");
   div.className = "setup-entry";
   div.dataset.kind = "aria2";
   div.innerHTML = `
     <div class="setup-entry-head">
-      <strong>aria2 节点 #${index}</strong>
+      <strong>aria2 实例 #${index}</strong>
       <button class="remove-btn" type="button">移除</button>
     </div>
     <div class="setup-grid">
       <div class="field">
-        <label>名称</label>
-        <input data-field="name" value="${esc(values.name || "aria2-" + String(index).padStart(2,"0"))}" required>
+        <label>稳定 ID</label>
+        <input data-field="id" value="${esc(id)}" required>
       </div>
       <div class="field">
-        <label>RPC Secret</label>
-        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="未设置可留空">
+        <label>显示名称</label>
+        <input data-field="name" value="${esc(values.name || id)}" required>
       </div>
       <div class="field wide">
         <label>JSON-RPC 地址</label>
         <input data-field="url" value="${esc(values.url || "")}" placeholder="http://192.168.1.10:6800/jsonrpc" required>
       </div>
-      <div class="field wide">
-        <label>下载目录</label>
-        <input data-field="dir" value="${esc(values.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
-        <span class="hint">填写 aria2 所在机器看到的目录，不是 PikPak Bridge 容器内部目录。</span>
-      </div>
       <div class="field">
-        <label>最大活动任务</label>
-        <input data-field="max_active" type="number" min="1" max="100" value="${esc(values.max_active || 4)}" required>
-      </div>
-      <div class="field">
-        <label>调度权重</label>
-        <input data-field="weight" type="number" min="0.1" step="0.1" value="${esc(values.weight || 10)}" required>
+        <label>RPC Secret</label>
+        <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="未设置可留空">
       </div>
     </div>`;
+  div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
+  div.querySelector('[data-field="name"]').addEventListener("input", refreshTargetAria2Options);
   div.querySelector(".remove-btn").addEventListener("click", () => {
     if ($("setupAria2").children.length <= 1) {
-      toast("至少保留一个 aria2 节点。", true);
+      toast("至少保留一个 aria2 实例。", true);
       return;
     }
     div.remove();
+    refreshTargetAria2Options();
   });
   return div;
+}
+
+function targetEntry(values={}) {
+  targetSeq += 1;
+  const index = targetSeq;
+  const id = values.id || (index === 1 ? "default" : "target-" + String(index).padStart(2,"0"));
+  const div = document.createElement("div");
+  div.className = "setup-entry";
+  div.dataset.kind = "target";
+  div.innerHTML = `
+    <div class="setup-entry-head">
+      <strong>Download Target #${index}</strong>
+      <button class="remove-btn" type="button">移除</button>
+    </div>
+    <div class="setup-grid">
+      <div class="field">
+        <label>稳定 ID</label>
+        <input data-field="id" value="${esc(id)}" required>
+      </div>
+      <div class="field">
+        <label>显示名称</label>
+        <input data-field="name" value="${esc(values.name || (index === 1 ? "默认下载" : id))}" required>
+      </div>
+      <div class="field">
+        <label>aria2 实例</label>
+        <select data-field="aria2_instance" required></select>
+      </div>
+      <div class="field">
+        <label>默认目标</label>
+        <label class="checkbox-row"><input data-field="default" type="checkbox" ${values.default || index === 1 ? "checked" : ""}> 未指定 Target 时使用</label>
+      </div>
+      <div class="field wide">
+        <label>下载目录</label>
+        <input data-field="dir" value="${esc(values.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
+        <span class="hint">填写 aria2 所在机器看到的目录。</span>
+      </div>
+    </div>`;
+  div.querySelector('[data-field="default"]').addEventListener("change", (event) => {
+    if (!event.target.checked) return;
+    $("setupTargets").querySelectorAll('[data-field="default"]').forEach(el => {
+      if (el !== event.target) el.checked = false;
+    });
+  });
+  div.querySelector(".remove-btn").addEventListener("click", () => {
+    if ($("setupTargets").children.length <= 1) {
+      toast("至少保留一个 Download Target。", true);
+      return;
+    }
+    const wasDefault = div.querySelector('[data-field="default"]').checked;
+    div.remove();
+    if (wasDefault) {
+      const first = $("setupTargets").querySelector('[data-field="default"]');
+      if (first) first.checked = true;
+    }
+  });
+  requestAnimationFrame(() => {
+    refreshTargetAria2Options();
+    if (values.aria2_instance) {
+      div.querySelector('[data-field="aria2_instance"]').value = values.aria2_instance;
+    }
+  });
+  return div;
+}
+
+function configuredAria2Options() {
+  return [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
+    id: row.querySelector('[data-field="id"]').value.trim(),
+    name: row.querySelector('[data-field="name"]').value.trim()
+  })).filter(x => x.id);
+}
+
+function refreshTargetAria2Options() {
+  const instances = configuredAria2Options();
+  $("setupTargets").querySelectorAll('[data-field="aria2_instance"]').forEach(select => {
+    const current = select.value;
+    select.innerHTML = instances.length
+      ? instances.map(x => `<option value="${esc(x.id)}">${esc(x.name || x.id)} · ${esc(x.id)}</option>`).join("")
+      : '<option value="">请先添加 aria2 实例</option>';
+    if (instances.some(x => x.id === current)) select.value = current;
+  });
 }
 
 function showSetup() {
   $("dashboard").classList.add("hidden");
   $("setupScreen").classList.remove("hidden");
   if (!$("setupAccounts").children.length) $("setupAccounts").appendChild(accountEntry());
-  if (!$("setupAria2").children.length) $("setupAria2").appendChild(aria2Entry({name:"unraid"}));
+  if (!$("setupAria2").children.length) $("setupAria2").appendChild(aria2Entry({id:"unraid", name:"Unraid"}));
+  if (!$("setupTargets").children.length) {
+    $("setupTargets").appendChild(targetEntry({
+      id:"default", name:"默认下载", aria2_instance:"unraid", dir:"/downloads/pikpak", default:true
+    }));
+  }
+  refreshTargetAria2Options();
 }
 
 function showDashboard() {
@@ -194,19 +286,26 @@ function showDashboard() {
 
 function collectSetup() {
   const accounts = [...$("setupAccounts").querySelectorAll(".setup-entry")].map(row => ({
+    id: row.querySelector('[data-field="id"]').value.trim(),
     name: row.querySelector('[data-field="name"]').value.trim(),
     username: row.querySelector('[data-field="username"]').value.trim(),
-    password: row.querySelector('[data-field="password"]').value
+    password: row.querySelector('[data-field="password"]').value,
+    max_jobs: Number(row.querySelector('[data-field="max_jobs"]').value)
   }));
   const instances = [...$("setupAria2").querySelectorAll(".setup-entry")].map(row => ({
+    id: row.querySelector('[data-field="id"]').value.trim(),
     name: row.querySelector('[data-field="name"]').value.trim(),
     url: row.querySelector('[data-field="url"]').value.trim(),
-    secret: row.querySelector('[data-field="secret"]').value,
-    dir: row.querySelector('[data-field="dir"]').value.trim(),
-    max_active: Number(row.querySelector('[data-field="max_active"]').value),
-    weight: Number(row.querySelector('[data-field="weight"]').value)
+    secret: row.querySelector('[data-field="secret"]').value
   }));
-  return {pikpak_accounts: accounts, aria2_instances: instances};
+  const targets = [...$("setupTargets").querySelectorAll(".setup-entry")].map(row => ({
+    id: row.querySelector('[data-field="id"]').value.trim(),
+    name: row.querySelector('[data-field="name"]').value.trim(),
+    aria2_instance: row.querySelector('[data-field="aria2_instance"]').value,
+    dir: row.querySelector('[data-field="dir"]').value.trim(),
+    default: row.querySelector('[data-field="default"]').checked
+  }));
+  return {pikpak_accounts: accounts, aria2_instances: instances, targets};
 }
 
 async function bootstrap() {
@@ -228,11 +327,13 @@ function startDashboard() {
   if (dashboardStarted) return;
   dashboardStarted = true;
   loadHealth();
+  loadTargets();
   loadTasks();
   loadStatus();
   setInterval(loadHealth, 15000);
   setInterval(loadTasks, 3000);
   setInterval(loadStatus, 60000);
+  setInterval(loadTargets, 60000);
 }
 
 async function loadHealth() {
@@ -244,6 +345,36 @@ async function loadHealth() {
   } catch (_) {
     badge.className = "health-badge bad";
     badge.innerHTML = '<span class="dot"></span><span>连接失败</span>';
+  }
+}
+
+async function loadTargets() {
+  if (targetsRefreshBusy) return;
+  targetsRefreshBusy = true;
+  try {
+    const data = await request("/api/v1/targets");
+    const targets = data.targets || [];
+    const select = $("targetSelect");
+    const current = select.value;
+    select.innerHTML = targets.map(t =>
+      `<option value="${esc(t.id)}">${esc(t.name)} · ${esc(t.aria2_instance)} · ${esc(t.dir)}</option>`
+    ).join("");
+    const preferred = targets.find(t => t.id === current) || targets.find(t => t.default) || targets[0];
+    if (preferred) select.value = preferred.id;
+    $("submitBtn").disabled = targets.length === 0;
+
+    $("targetCount").textContent = targets.length;
+    $("targetList").innerHTML = targets.length ? targets.map(t => `
+      <div class="resource">
+        <div class="resource-top"><span class="resource-name">${esc(t.name)}</span>${t.default ? '<span class="badge success">默认</span>' : ''}</div>
+        <div class="resource-meta"><span>${esc(t.id)}</span><span>${esc(t.aria2_instance)}</span></div>
+        <div class="resource-meta"><span>目录</span><span title="${esc(t.dir)}">${esc(truncate(t.dir, 32))}</span></div>
+      </div>
+    `).join("") : '<div class="empty-block">未配置 Download Target</div>';
+  } catch (err) {
+    $("targetList").innerHTML = `<div class="empty-block">目标获取失败：${esc(err.message)}</div>`;
+  } finally {
+    targetsRefreshBusy = false;
   }
 }
 
@@ -291,12 +422,13 @@ async function loadTasks() {
       } else if (task.status === "COMPLETED") {
         progressHtml = '<span class="muted">100%</span>';
       }
+      const targetLabel = `${task.target_name || task.target_id || "—"} · ${task.aria2_instance_id || "—"}`;
       return `<tr data-task-id="${esc(task.id)}">
         <td>${statusBadge(task.status)}</td>
         <td class="source-cell"><div class="source-main" title="${esc(task.source)}">${esc(truncate(task.source))}</div><div class="source-sub">${esc(task.source_type || "")} · ${esc(task.id)}</div></td>
         <td>${progressHtml}</td>
-        <td>${esc(task.pikpak_account || "—")}</td>
-        <td>${esc(task.aria2_instance || "—")}</td>
+        <td>${esc(task.pikpak_account_id || "—")}</td>
+        <td title="${esc(task.download_dir || "")}">${esc(targetLabel)}</td>
         <td class="muted">${fmtTime(task.updated_at)}</td>
       </tr>`;
     }).join("");
@@ -329,18 +461,18 @@ async function loadStatus() {
 
     $("accountList").innerHTML = accounts.length ? accounts.map(a => `
       <div class="resource">
-        <div class="resource-top"><span class="resource-name">${esc(a.name)}</span>${resourceBadge(a.enabled && a.healthy, a.state)}</div>
-        <div class="resource-meta"><span>离线额度 <b>${a.quota_remaining ?? 0}/${a.quota_total ?? 0}</b></span><span>任务 ${a.active_jobs ?? 0}/${a.max_jobs ?? 0}</span></div>
-        <div class="resource-meta"><span>可用空间</span><span>${fmtBytes(a.storage_free)}</span></div>
+        <div class="resource-top"><span class="resource-name">${esc(a.name || a.id)}</span>${resourceBadge(a.enabled && a.healthy, a.state)}</div>
+        <div class="resource-meta"><span>${esc(a.id)}</span><span>离线额度 <b>${a.quota_remaining ?? 0}/${a.quota_total ?? 0}</b></span></div>
+        <div class="resource-meta"><span>任务 ${a.active_jobs ?? 0}/${a.max_jobs ?? 0}</span><span>${fmtBytes(a.storage_free)}</span></div>
         ${a.error ? `<div class="resource-error">${esc(a.error)}</div>` : ""}
       </div>
     `).join("") : '<div class="empty-block">未配置 PikPak 账号</div>';
 
     $("aria2List").innerHTML = instances.length ? instances.map(a => `
       <div class="resource">
-        <div class="resource-top"><span class="resource-name">${esc(a.name)}</span>${resourceBadge(a.enabled && a.healthy, a.enabled ? "OFFLINE" : "DISABLED")}</div>
-        <div class="resource-meta"><span>Active <b>${a.active ?? 0}/${a.max_active ?? 0}</b></span><span>Waiting ${a.waiting ?? 0}</span></div>
-        <div class="resource-meta"><span>调度权重</span><span>${a.weight ?? 1}</span></div>
+        <div class="resource-top"><span class="resource-name">${esc(a.name || a.id)}</span>${resourceBadge(a.enabled && a.healthy, a.enabled ? "OFFLINE" : "DISABLED")}</div>
+        <div class="resource-meta"><span>${esc(a.id)}</span><span>Active <b>${a.active ?? 0}</b></span></div>
+        <div class="resource-meta"><span>Waiting</span><span>${a.waiting ?? 0}</span></div>
         ${a.error ? `<div class="resource-error">${esc(a.error)}</div>` : ""}
       </div>
     `).join("") : '<div class="empty-block">未配置 aria2 实例</div>';
@@ -367,10 +499,12 @@ async function openTask(id) {
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
         <dt>来源</dt><dd>${esc(task.source)}</dd>
-        <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account || "—")}</dd>
+        <dt>Download Target</dt><dd>${esc(task.target_name || "—")} (${esc(task.target_id || "—")})</dd>
+        <dt>aria2 实例</dt><dd>${esc(task.aria2_instance_id || "—")}</dd>
+        <dt>下载目录</dt><dd>${esc(task.download_dir || "—")}</dd>
+        <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account_id || "—")}</dd>
         <dt>PikPak Task ID</dt><dd>${esc(task.pikpak_task_id || "—")}</dd>
         <dt>PikPak Root ID</dt><dd>${esc(task.pikpak_root_file_id || "—")}</dd>
-        <dt>aria2 实例</dt><dd>${esc(task.aria2_instance || "—")}</dd>
         <dt>重试次数</dt><dd>${task.retry_count ?? 0}</dd>
         <dt>创建时间</dt><dd>${fmtTime(task.created_at)}</dd>
         <dt>更新时间</dt><dd>${fmtTime(task.updated_at)}</dd>
@@ -379,7 +513,7 @@ async function openTask(id) {
       <div class="detail-section"><h3>下载文件（${downloads.length}）</h3>
         ${downloads.length ? downloads.map(d => `
           <div class="download-row">
-            <div><div class="download-name">${esc(d.relative_path)}</div><div class="download-meta">GID ${esc(d.aria2_gid || "—")} · ${esc(d.aria2_instance || "—")}</div></div>
+            <div><div class="download-name">${esc(d.relative_path)}</div><div class="download-meta">GID ${esc(d.aria2_gid || "—")} · ${esc(d.aria2_instance_id || "—")}</div></div>
             <div>${statusBadge(d.status)}</div>
             <div class="download-meta">${fmtBytes(d.completed_length)} / ${fmtBytes(d.total_length || d.expected_size)}</div>
             <div class="download-meta">${d.last_error ? esc(d.last_error) : ""}</div>
@@ -392,7 +526,14 @@ async function openTask(id) {
 }
 
 $("addAccountBtn").addEventListener("click", () => $("setupAccounts").appendChild(accountEntry()));
-$("addAria2Btn").addEventListener("click", () => $("setupAria2").appendChild(aria2Entry()));
+$("addAria2Btn").addEventListener("click", () => {
+  $("setupAria2").appendChild(aria2Entry());
+  refreshTargetAria2Options();
+});
+$("addTargetBtn").addEventListener("click", () => {
+  $("setupTargets").appendChild(targetEntry());
+  refreshTargetAria2Options();
+});
 
 $("setupForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -419,21 +560,23 @@ $("taskForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("sourceInput");
   const source = input.value.trim();
+  const target = $("targetSelect").value;
   if (!source) { toast("请先输入下载链接或磁链。", true); return; }
+  if (!target) { toast("请选择 Download Target。", true); return; }
   const button = $("submitBtn");
   button.disabled = true;
   try {
     const task = await request("/api/v1/tasks", {
       method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({url:source})
+      body:JSON.stringify({url:source, target})
     });
     input.value = "";
     toast("任务已创建：" + task.id);
     await loadTasks();
   } catch (err) {
     if (err.status === 409 && err.body?.existing_task_id) {
-      toast("任务已存在：" + err.body.existing_task_id, true);
+      toast("该资源在此 Target 已存在：" + err.body.existing_task_id, true);
     } else {
       toast("创建失败：" + err.message, true);
     }
@@ -444,7 +587,7 @@ $("taskForm").addEventListener("submit", async (event) => {
 
 $("refreshBtn").addEventListener("click", async () => {
   $("refreshBtn").textContent = "…";
-  await Promise.all([loadHealth(), loadTasks(), loadStatus()]);
+  await Promise.all([loadHealth(), loadTasks(), loadStatus(), loadTargets()]);
   $("refreshBtn").textContent = "↻";
 });
 
