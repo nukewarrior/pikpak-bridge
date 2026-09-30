@@ -169,7 +169,7 @@ docker compose -p pikpak-bridge-pr12 up -d
 
 Open `http://<host>:8081/` and initialize the development instance independently.
 
-During the current development cycle, pushes to `master` and `refactor/download-targets` publish `latest`, so the branch can be tested with the normal Compose workflow. Manual builds can still publish an explicit tag plus the commit `sha-xxxxxxx` tag. The fixed Compose `container_name` is intentionally omitted so multiple project names can coexist.
+Only pushes to `master` publish `latest`. Manual builds can still publish an explicit tag plus the commit `sha-xxxxxxx` tag. The fixed Compose `container_name` is intentionally omitted so multiple project names can coexist.
 
 ## API
 
