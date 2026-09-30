@@ -109,7 +109,6 @@ type setupAria2Instance struct {
 	Name      string `json:"name"`
 	URL       string `json:"url"`
 	Secret    string `json:"secret"`
-	MaxActive int    `json:"max_active"`
 }
 
 type setupTarget struct {
@@ -160,16 +159,11 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 
 	cfg.Aria2.Instances = make([]config.Aria2Instance, 0, len(req.Aria2Instances))
 	for _, instance := range req.Aria2Instances {
-		maxActive := instance.MaxActive
-		if maxActive == 0 {
-			maxActive = 4
-		}
 		cfg.Aria2.Instances = append(cfg.Aria2.Instances, config.Aria2Instance{
 			ID:        strings.TrimSpace(instance.ID),
 			Name:      strings.TrimSpace(instance.Name),
 			URL:       strings.TrimSpace(instance.URL),
 			Secret:    instance.Secret,
-			MaxActive: maxActive,
 		})
 	}
 
@@ -372,7 +366,6 @@ type aria2StatusView struct {
 	Healthy   bool   `json:"healthy"`
 	Active    int    `json:"active"`
 	Waiting   int    `json:"waiting"`
-	MaxActive int    `json:"max_active"`
 	Error     string `json:"error,omitempty"`
 }
 
@@ -449,7 +442,6 @@ func (s *Server) runtimeStatus(w http.ResponseWriter, r *http.Request) {
 			Healthy:   snapshot.Healthy,
 			Active:    snapshot.Active,
 			Waiting:   snapshot.Waiting,
-			MaxActive: snapshot.MaxActive,
 			Error:     snapshot.Error,
 		})
 	}
