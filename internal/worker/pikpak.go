@@ -368,10 +368,14 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 		"phase", remote.Status,
 		"root_file_id", remote.RootFileID,
 	)
+	now := time.Now().UTC()
 	task.PikPakTaskID = remote.ID
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
 	}
+	task.PikPakPhase = remote.Status
+	task.PikPakProgress = remote.Progress
+	task.PikPakLastActivityAt = timePtr(now)
 	task.RetryCount = 0
 	task.Error = ""
 	task.NextAttemptAt = nil
@@ -407,8 +411,18 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 		return w.retry(ctx, task, domain.TaskPikPakRunning, domain.TaskPikPakFailed, err)
 	}
 
+	now := time.Now().UTC()
+	activity := task.PikPakLastActivityAt == nil ||
+		task.PikPakPhase != remote.Status ||
+		task.PikPakProgress != remote.Progress ||
+		(remote.RootFileID != "" && task.PikPakRootFileID != remote.RootFileID)
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
+	}
+	task.PikPakPhase = remote.Status
+	task.PikPakProgress = remote.Progress
+	if activity {
+		task.PikPakLastActivityAt = timePtr(now)
 	}
 	task.RetryCount = 0
 	task.Error = ""
@@ -420,10 +434,11 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			"account_id", task.PikPakAccountID,
 			"pikpak_task_id", task.PikPakTaskID,
 			"root_file_id", task.PikPakRootFileID,
+			"progress", task.PikPakProgress,
 		)
 		w.invalidateAccount(task.PikPakAccountID)
 		if task.PikPakRootFileID == "" {
-			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
+			task.NextAttemptAt = timePtr(now.Add(w.options.StatusInterval))
 			task.Error = "PikPak task complete but root file ID is not available yet"
 		} else {
 			task.Status = domain.TaskPikPakComplete
@@ -441,11 +456,31 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 		task.NextAttemptAt = nil
 		task.Error = nonEmpty(remote.Error, "PikPak offline task failed")
 	default:
+		if task.PikPakLastActivityAt != nil && now.Sub(*task.PikPakLastActivityAt) >= w.options.StallTimeout {
+			stalledFor := now.Sub(*task.PikPakLastActivityAt).Round(time.Second)
+			cancelErr := w.provider.CancelOfflineTask(ctx, task.PikPakAccountID, task.PikPakTaskID)
+			w.invalidateAccount(task.PikPakAccountID)
+			task.Status = domain.TaskPikPakFailed
+			task.NextAttemptAt = nil
+			task.Error = fmt.Sprintf("PikPak 云下载连续 %s 无进展（%d%%），已判定卡死", stalledFor, task.PikPakProgress)
+			if cancelErr != nil {
+				task.Error += "; 远端取消失败: " + cancelErr.Error()
+			}
+			slog.Warn("PikPak 离线任务卡死",
+				"task_id", task.ID,
+				"account_id", task.PikPakAccountID,
+				"pikpak_task_id", task.PikPakTaskID,
+				"progress", task.PikPakProgress,
+				"stalled_for", stalledFor,
+				"cancel_error", cancelErr,
+			)
+			return w.store.SaveTask(ctx, task, "pikpak.stalled", task.Error)
+		}
 		task.Status = domain.TaskPikPakRunning
-		task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
+		task.NextAttemptAt = timePtr(now.Add(w.options.StatusInterval))
 	}
 
-	return w.store.SaveTask(ctx, task, "pikpak.polled", string(task.Status))
+	return w.store.SaveTask(ctx, task, "", "")
 }
 
 func (w *Worker) beginResolve(ctx context.Context, task *domain.Task) error {
