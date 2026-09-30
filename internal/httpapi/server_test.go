@@ -18,10 +18,13 @@ import (
 )
 
 type fakeRuntime struct {
-	configured bool
-	applied    *config.Config
-	cfg        *config.Config
-	targets    []config.DownloadTarget
+	configured       bool
+	applied          *config.Config
+	cfg              *config.Config
+	targets          []config.DownloadTarget
+	cancelledPikPak  []string
+	deletedPikPak    []string
+	cancelledAria2   []string
 }
 
 func (f *fakeRuntime) Configured() bool { return f.configured }
@@ -56,6 +59,21 @@ func (f *fakeRuntime) AccountIDs() []string { return nil }
 
 func (f *fakeRuntime) RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error) {
 	return pikpak.AccountSnapshot{}, nil
+}
+
+func (f *fakeRuntime) CancelPikPakOffline(_ context.Context, accountID, taskID string) error {
+	f.cancelledPikPak = append(f.cancelledPikPak, accountID+":"+taskID)
+	return nil
+}
+
+func (f *fakeRuntime) DeletePikPakFile(_ context.Context, accountID, fileID string) error {
+	f.deletedPikPak = append(f.deletedPikPak, accountID+":"+fileID)
+	return nil
+}
+
+func (f *fakeRuntime) CancelAria2(_ context.Context, instanceID, gid string) error {
+	f.cancelledAria2 = append(f.cancelledAria2, instanceID+":"+gid)
+	return nil
 }
 
 func (f *fakeRuntime) Aria2Snapshots(context.Context) []aria2.InstanceSnapshot { return nil }
