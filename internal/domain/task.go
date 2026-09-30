@@ -36,9 +36,12 @@ type Task struct {
 	DownloadDir     string     `json:"download_dir"`
 	Status          TaskStatus `json:"status"`
 
-	PikPakAccountID  string `json:"pikpak_account_id,omitempty"`
-	PikPakTaskID     string `json:"pikpak_task_id,omitempty"`
-	PikPakRootFileID string `json:"pikpak_root_file_id,omitempty"`
+	PikPakAccountID      string     `json:"pikpak_account_id,omitempty"`
+	PikPakTaskID         string     `json:"pikpak_task_id,omitempty"`
+	PikPakRootFileID     string     `json:"pikpak_root_file_id,omitempty"`
+	PikPakPhase          string     `json:"pikpak_phase,omitempty"`
+	PikPakProgress       int64      `json:"pikpak_progress"`
+	PikPakLastActivityAt *time.Time `json:"pikpak_last_activity_at,omitempty"`
 
 	RetryCount       int        `json:"retry_count"`
 	ManualRetryCount int        `json:"manual_retry_count"`

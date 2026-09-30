@@ -15,6 +15,7 @@ type AccountSnapshot struct {
 	StorageFree    int64
 	StorageTotal   int64
 	ActiveJobs     int
+	ActiveTaskIDs  []string
 	MaxJobs        int
 	LastUsedAt     time.Time
 	CooldownUntil  time.Time
@@ -25,6 +26,7 @@ type OfflineTask struct {
 	ID         string
 	Status     string
 	RootFileID string
+	Progress   int64
 	Error      string
 }
 
@@ -46,6 +48,7 @@ type Provider interface {
 	RefreshAccount(ctx context.Context, accountID string) (AccountSnapshot, error)
 	SubmitOffline(ctx context.Context, accountID, source string) (OfflineTask, error)
 	GetOfflineTask(ctx context.Context, accountID, taskID string) (OfflineTask, error)
+	CancelOfflineTask(ctx context.Context, accountID, taskID string) error
 	ResolveFiles(ctx context.Context, accountID, rootFileID string) (ResolvedFiles, error)
 	GetDownloadURL(ctx context.Context, accountID, fileID string) (string, error)
 	DeletePermanently(ctx context.Context, accountID, fileID string) error

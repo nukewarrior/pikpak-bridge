@@ -17,6 +17,8 @@ import (
 
 type pikpakStore interface {
 	ListPikPakWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error)
+	PikPakActiveCounts(ctx context.Context) (map[string]int, error)
+	PikPakKnownTaskIDs(ctx context.Context) (map[string]map[string]struct{}, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
 	ReplaceRemoteFiles(ctx context.Context, taskID string, files []domain.RemoteFile) error
 }
@@ -26,6 +28,7 @@ type Options struct {
 	WorkerInterval          time.Duration
 	QuotaRefresh            time.Duration
 	StatusInterval          time.Duration
+	StallTimeout            time.Duration
 	RetryInterval           time.Duration
 	MaxRetry                int
 	MinFreeSpace            int64
@@ -61,6 +64,9 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 	if options.StatusInterval <= 0 {
 		options.StatusInterval = 10 * time.Second
 	}
+	if options.StallTimeout <= 0 {
+		options.StallTimeout = 20 * time.Minute
+	}
 	if options.RetryInterval <= 0 {
 		options.RetryInterval = 30 * time.Second
 	}
@@ -88,6 +94,7 @@ func (w *Worker) Run(ctx context.Context) {
 		"worker_interval", w.options.WorkerInterval,
 		"quota_refresh", w.options.QuotaRefresh,
 		"status_interval", w.options.StatusInterval,
+		"stall_timeout", w.options.StallTimeout,
 		"retry_interval", w.options.RetryInterval,
 		"min_free_space", w.options.MinFreeSpace,
 	)
@@ -158,6 +165,15 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		)
 	}
 
+	managedCounts, err := w.store.PikPakActiveCounts(ctx)
+	if err != nil {
+		return err
+	}
+	knownTaskIDs, err := w.store.PikPakKnownTaskIDs(ctx)
+	if err != nil {
+		return err
+	}
+
 	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
 	for _, id := range w.options.AccountIDs {
 		runtime := w.runtime(id)
@@ -189,8 +205,19 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		if runtime.has && now.Sub(runtime.refreshed) < w.options.QuotaRefresh {
 			snapshot := runtime.snapshot
 			snapshot.CooldownUntil = runtime.cooldown
-			snapshot.ActiveJobs += runtime.reserved
+			remoteActive := snapshot.ActiveJobs
+			externalActive := unmanagedRemoteActive(snapshot, knownTaskIDs[id])
+			snapshot.ActiveJobs = managedCounts[id] + externalActive + runtime.reserved
 			snapshots = append(snapshots, snapshot)
+			if remoteActive != snapshot.ActiveJobs {
+				slog.Debug("PikPak 并发计数已剔除 Bridge 残留远端任务",
+					"account_id", id,
+					"remote_active_jobs", remoteActive,
+					"managed_active_jobs", managedCounts[id]+runtime.reserved,
+					"external_active_jobs", externalActive,
+					"effective_active_jobs", snapshot.ActiveJobs,
+				)
+			}
 			continue
 		}
 
@@ -210,7 +237,9 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			continue
 		}
 		w.noteAccountSuccess(id, snapshot, now)
-		snapshot.ActiveJobs += runtime.reserved
+		remoteActive := snapshot.ActiveJobs
+		externalActive := unmanagedRemoteActive(snapshot, knownTaskIDs[id])
+		snapshot.ActiveJobs = managedCounts[id] + externalActive + runtime.reserved
 		snapshots = append(snapshots, snapshot)
 		slog.Info("PikPak 账号状态已刷新",
 			"account_id", snapshot.ID,
@@ -221,7 +250,10 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			"quota_remaining", snapshot.QuotaRemaining,
 			"quota_total", snapshot.QuotaTotal,
 			"storage_free", snapshot.StorageFree,
-			"active_jobs", snapshot.ActiveJobs,
+			"remote_active_jobs", remoteActive,
+			"managed_active_jobs", managedCounts[id]+runtime.reserved,
+			"external_active_jobs", externalActive,
+			"effective_active_jobs", snapshot.ActiveJobs,
 			"max_jobs", snapshot.MaxJobs,
 		)
 	}
@@ -284,6 +316,9 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 	task.PikPakAccountID = selected.ID
 	task.PikPakTaskID = ""
 	task.PikPakRootFileID = ""
+	task.PikPakPhase = ""
+	task.PikPakProgress = 0
+	task.PikPakLastActivityAt = nil
 	task.Status = domain.TaskPikPakSubmitting
 	task.Error = ""
 	task.RetryCount = 0
@@ -325,6 +360,9 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 			task.PikPakAccountID = ""
 			task.PikPakTaskID = ""
 			task.PikPakRootFileID = ""
+			task.PikPakPhase = ""
+			task.PikPakProgress = 0
+			task.PikPakLastActivityAt = nil
 			task.Status = domain.TaskWaitingPikPakAccount
 			task.Error = err.Error()
 			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
@@ -347,10 +385,14 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 		"phase", remote.Status,
 		"root_file_id", remote.RootFileID,
 	)
+	now := time.Now().UTC()
 	task.PikPakTaskID = remote.ID
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
 	}
+	task.PikPakPhase = remote.Status
+	task.PikPakProgress = remote.Progress
+	task.PikPakLastActivityAt = timePtr(now)
 	task.RetryCount = 0
 	task.Error = ""
 	task.NextAttemptAt = nil
@@ -386,8 +428,18 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 		return w.retry(ctx, task, domain.TaskPikPakRunning, domain.TaskPikPakFailed, err)
 	}
 
+	now := time.Now().UTC()
+	activity := task.PikPakLastActivityAt == nil ||
+		task.PikPakPhase != remote.Status ||
+		task.PikPakProgress != remote.Progress ||
+		(remote.RootFileID != "" && task.PikPakRootFileID != remote.RootFileID)
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
+	}
+	task.PikPakPhase = remote.Status
+	task.PikPakProgress = remote.Progress
+	if activity {
+		task.PikPakLastActivityAt = timePtr(now)
 	}
 	task.RetryCount = 0
 	task.Error = ""
@@ -399,10 +451,11 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 			"account_id", task.PikPakAccountID,
 			"pikpak_task_id", task.PikPakTaskID,
 			"root_file_id", task.PikPakRootFileID,
+			"progress", task.PikPakProgress,
 		)
 		w.invalidateAccount(task.PikPakAccountID)
 		if task.PikPakRootFileID == "" {
-			task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
+			task.NextAttemptAt = timePtr(now.Add(w.options.StatusInterval))
 			task.Error = "PikPak task complete but root file ID is not available yet"
 		} else {
 			task.Status = domain.TaskPikPakComplete
@@ -420,11 +473,33 @@ func (w *Worker) poll(ctx context.Context, task *domain.Task) error {
 		task.NextAttemptAt = nil
 		task.Error = nonEmpty(remote.Error, "PikPak offline task failed")
 	default:
+		if task.PikPakLastActivityAt != nil && now.Sub(*task.PikPakLastActivityAt) >= w.options.StallTimeout {
+			stalledFor := now.Sub(*task.PikPakLastActivityAt).Round(time.Second)
+			cancelCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			cancelErr := w.provider.CancelOfflineTask(cancelCtx, task.PikPakAccountID, task.PikPakTaskID)
+			cancel()
+			w.invalidateAccount(task.PikPakAccountID)
+			task.Status = domain.TaskPikPakFailed
+			task.NextAttemptAt = nil
+			task.Error = fmt.Sprintf("PikPak 云下载连续 %s 无进展（%d%%），已判定卡死", stalledFor, task.PikPakProgress)
+			if cancelErr != nil {
+				task.Error += "; 远端取消失败: " + cancelErr.Error()
+			}
+			slog.Warn("PikPak 离线任务卡死",
+				"task_id", task.ID,
+				"account_id", task.PikPakAccountID,
+				"pikpak_task_id", task.PikPakTaskID,
+				"progress", task.PikPakProgress,
+				"stalled_for", stalledFor,
+				"cancel_error", cancelErr,
+			)
+			return w.store.SaveTask(ctx, task, "pikpak.stalled", task.Error)
+		}
 		task.Status = domain.TaskPikPakRunning
-		task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.StatusInterval))
+		task.NextAttemptAt = timePtr(now.Add(w.options.StatusInterval))
 	}
 
-	return w.store.SaveTask(ctx, task, "pikpak.polled", string(task.Status))
+	return w.store.SaveTask(ctx, task, "", "")
 }
 
 func (w *Worker) beginResolve(ctx context.Context, task *domain.Task) error {
@@ -508,6 +583,21 @@ func (w *Worker) retry(
 	task.Status = retryStatus
 	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.RetryInterval))
 	return w.store.SaveTask(ctx, task, "pikpak.retry", cause.Error())
+}
+
+func unmanagedRemoteActive(snapshot pikpak.AccountSnapshot, known map[string]struct{}) int {
+	if len(snapshot.ActiveTaskIDs) == 0 {
+		// Older/fake providers may only supply a count. Treat it as external rather than
+		// silently exceeding remote activity we cannot attribute to Bridge.
+		return snapshot.ActiveJobs
+	}
+	count := 0
+	for _, taskID := range snapshot.ActiveTaskIDs {
+		if _, owned := known[taskID]; !owned {
+			count++
+		}
+	}
+	return count
 }
 
 func (w *Worker) waitForAccount(

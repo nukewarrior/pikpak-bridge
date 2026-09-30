@@ -76,6 +76,11 @@ func (c *Client) TellStatus(ctx context.Context, gid string) (Status, error) {
 	return out, err
 }
 
+func (c *Client) Remove(ctx context.Context, gid string) error {
+	var result string
+	return c.call(ctx, "aria2.remove", []any{gid}, &result)
+}
+
 func (c *Client) RemoveDownloadResult(ctx context.Context, gid string) error {
 	var result string
 	return c.call(ctx, "aria2.removeDownloadResult", []any{gid}, &result)

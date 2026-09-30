@@ -26,6 +26,7 @@ type Backend interface {
 	Snapshot(ctx context.Context, instanceID string) (InstanceSnapshot, error)
 	Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error)
 	TellStatus(ctx context.Context, instanceID, gid string) (Status, error)
+	Remove(ctx context.Context, instanceID, gid string) error
 	Forget(ctx context.Context, instanceID, gid string) error
 }
 
@@ -130,6 +131,14 @@ func (r *Registry) TellStatus(ctx context.Context, instanceID, gid string) (Stat
 		return Status{}, err
 	}
 	return instance.client.TellStatus(ctx, gid)
+}
+
+func (r *Registry) Remove(ctx context.Context, instanceID, gid string) error {
+	instance, err := r.enabled(instanceID)
+	if err != nil {
+		return err
+	}
+	return instance.client.Remove(ctx, gid)
 }
 
 func (r *Registry) Forget(ctx context.Context, instanceID, gid string) error {

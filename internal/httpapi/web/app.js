@@ -42,7 +42,7 @@ const TERMINAL_TASKS = new Set([
 ]);
 
 const ERROR_EVENT_HINTS = [
-  "failed","retry","error","eof","rejected","missing","manual_retry"
+  "failed","retry","error","eof","rejected","missing","manual_retry","stalled"
 ];
 
 function isErrorHistoryEvent(event) {
@@ -60,7 +60,10 @@ function eventLabel(type) {
     "aria2.failed": "aria2 失败",
     "pikpak.retry": "PikPak 重试",
     "pikpak.failed": "PikPak 失败",
+    "pikpak.stalled": "PikPak 卡死保护",
     "pikpak.account_rejected": "PikPak 账号不可用",
+    "task.cancelled": "任务已取消",
+    "task.cancel_cleanup_failed": "取消后清理异常",
     "verify.failed": "校验失败",
     "cleanup.retry": "清理重试",
     "cleanup.failed": "清理失败"
@@ -123,6 +126,18 @@ function fmtTime(value) {
     month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit",
     hour12:false
   }).format(d);
+}
+
+function fmtSince(value) {
+  if (!value) return "—";
+  const ms = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "刚刚";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec} 秒前`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分钟前`;
+  const hour = Math.floor(min / 60);
+  return `${hour} 小时前`;
 }
 
 function fmtBytes(bytes) {
@@ -302,7 +317,10 @@ function accountStatusMeta(item) {
   const storage = status.storage_total > 0
     ? `空间 ${fmtBytes(status.storage_free)} / ${fmtBytes(status.storage_total)}`
     : `剩余空间 ${fmtBytes(status.storage_free)}`;
-  const jobs = `并发 ${status.active_jobs || 0} / ${status.max_jobs || item.max_jobs || 0}`;
+  const maxJobs = status.max_jobs || item.max_jobs || 0;
+  const managedJobs = status.managed_active_jobs ?? 0;
+  const remoteJobs = status.active_jobs ?? 0;
+  const jobs = `Bridge 并发 ${managedJobs} / ${maxJobs} · PikPak 远端活动 ${remoteJobs}`;
   return `<div class="resource-health-meta">${esc(quota)} · ${esc(storage)} · ${esc(jobs)}</div><div class="resource-health-time">${esc(checkedText(status))}</div>`;
 }
 
@@ -743,6 +761,16 @@ async function loadTargets() {
 }
 
 async function progressForTask(task) {
+  if (["PIKPAK_SUBMITTING","PIKPAK_RUNNING","PIKPAK_COMPLETE","RESOLVING_FILES"].includes(task.status)) {
+    const raw = Number(task.pikpak_progress || 0);
+    const pct = Math.max(0, Math.min(100, Number.isFinite(raw) ? raw : 0));
+    const last = task.pikpak_last_activity_at ? ` · 最近进展 ${fmtSince(task.pikpak_last_activity_at)}` : "";
+    return {
+      kind: "pikpak",
+      pct,
+      label: `PikPak ${pct.toFixed(0)}%${last}`
+    };
+  }
   if (!["ARIA2_DOWNLOADING","VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"].includes(task.status)) {
     return null;
   }
@@ -791,7 +819,9 @@ async function loadTasks() {
       const p = progress[task.id];
       const pct = p ? p.pct : 0;
       const progressLabel = p
-        ? (p.total > 0 ? `${fmtBytes(p.done)} / ${fmtBytes(p.total)}` : `${p.completedFiles}/${p.count} 文件`)
+        ? (p.kind === "pikpak"
+          ? p.label
+          : (p.total > 0 ? `${fmtBytes(p.done)} / ${fmtBytes(p.total)}` : `${p.completedFiles}/${p.count} 文件`))
         : STATUS[task.status]?.[0] || "处理中";
       const target = task.target_name || task.target_id || "—";
       const account = task.pikpak_account_id || "自动选择";
@@ -928,6 +958,7 @@ async function openTask(id) {
     const downloads = downloadsData.downloads || [];
     const events = (eventsData.events || []).filter(isErrorHistoryEvent);
     const canRetry = FAILED_TASKS.has(task.status);
+    const canCancel = ACTIVE.has(task.status);
     $("dialogBody").innerHTML = `
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
@@ -939,6 +970,9 @@ async function openTask(id) {
         <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account_id || "—")}</dd>
         <dt>PikPak Task ID</dt><dd>${esc(task.pikpak_task_id || "—")}</dd>
         <dt>PikPak Root ID</dt><dd>${esc(task.pikpak_root_file_id || "—")}</dd>
+        <dt>PikPak Phase</dt><dd>${esc(task.pikpak_phase || "—")}</dd>
+        <dt>PikPak 进度</dt><dd>${Number(task.pikpak_progress || 0).toFixed(0)}%</dd>
+        <dt>最近进展</dt><dd>${task.pikpak_last_activity_at ? esc(fmtTime(task.pikpak_last_activity_at) + "（" + fmtSince(task.pikpak_last_activity_at) + "）") : "—"}</dd>
         <dt>当前重试次数</dt><dd>${task.retry_count ?? 0}</dd>
         <dt>手动重试次数</dt><dd>${task.manual_retry_count ?? 0}</dd>
         <dt>创建时间</dt><dd>${fmtTime(task.created_at)}</dd>
@@ -952,6 +986,14 @@ async function openTask(id) {
             <span>保留错误历史，并重新获得完整 10 次自动重试机会。</span>
           </div>
           <button id="retryTaskBtn" class="primary-btn compact" type="button">重试任务</button>
+        </div>` : ""}
+      ${canCancel ? `
+        <div class="task-retry-panel">
+          <div>
+            <strong>取消这个任务</strong>
+            <span>停止 PikPak / aria2 处理，并清理该任务占用的远端资源。</span>
+          </div>
+          <button id="cancelTaskBtn" class="primary-btn compact" type="button">取消任务</button>
         </div>` : ""}
       <div class="detail-section">
         <h3>错误历史（${events.length}）</h3>
@@ -985,6 +1027,24 @@ async function openTask(id) {
           </div>
         `).join("") : '<div class="empty-state"><span>尚未创建 aria2 下载记录</span></div>'}
       </div>`;
+
+    const cancelButton = $("cancelTaskBtn");
+    if (cancelButton) {
+      cancelButton.addEventListener("click", async () => {
+        if (!window.confirm("确定取消这个任务吗？系统会尝试停止 PikPak / aria2，并清理对应远端资源。")) return;
+        cancelButton.disabled = true;
+        try {
+          const result = await request(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {method:"POST"});
+          const warnings = result.cleanup_warnings || [];
+          toast(warnings.length ? "任务已取消，但部分远端资源清理失败。" : "任务已取消。", warnings.length > 0);
+          await Promise.all([loadTasks(), loadHistoryTasks()]);
+          await openTask(id);
+        } catch (err) {
+          toast("取消失败：" + err.message, true);
+          cancelButton.disabled = false;
+        }
+      });
+    }
 
     const retryButton = $("retryTaskBtn");
     if (retryButton) {

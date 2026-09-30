@@ -3,6 +3,7 @@ package pikpak
 import (
 	"bytes"
 	"context"
+	"errors"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -248,6 +249,17 @@ func (c *Client) OfflineTasks(ctx context.Context) ([]offlineTaskAPI, error) {
 		}
 		values.Set("page_token", resp.NextPageToken)
 	}
+}
+
+func (c *Client) DeleteOfflineTask(ctx context.Context, taskID string, deleteFiles bool) error {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return errors.New("refusing to delete empty PikPak task ID")
+	}
+	values := url.Values{}
+	values.Add("task_ids", taskID)
+	values.Set("delete_files", strconv.FormatBool(deleteFiles))
+	return c.doJSON(ctx, http.MethodDelete, apiDrive+"/drive/v1/tasks?"+values.Encode(), nil, nil)
 }
 
 func (c *Client) ListByParentID(ctx context.Context, parentID string) ([]fileStat, error) {

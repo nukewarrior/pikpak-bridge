@@ -80,12 +80,13 @@ func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (Account
 		return base, err
 	}
 
-	active := 0
+	activeTaskIDs := make([]string, 0)
 	for _, task := range tasks {
 		if task.Phase == PhasePending || task.Phase == PhaseRunning {
-			active++
+			activeTaskIDs = append(activeTaskIDs, task.ID)
 		}
 	}
+	active := len(activeTaskIDs)
 
 	quotaTotal := int64(q.Quotas.CloudDownload.Limit)
 	quotaUsage := int64(q.Quotas.CloudDownload.Usage)
@@ -117,6 +118,7 @@ func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (Account
 	base.StorageFree = storageFree
 	base.StorageTotal = storageTotal
 	base.ActiveJobs = active
+	base.ActiveTaskIDs = activeTaskIDs
 	base.LastUsedAt = lastUsed
 	base.State = state
 	return base, nil
@@ -166,6 +168,28 @@ func (m *Manager) GetOfflineTask(ctx context.Context, accountID, taskID string) 
 		}
 	}
 	return OfflineTask{}, fmt.Errorf("pikpak offline task %q not found", taskID)
+}
+
+func (m *Manager) CancelOfflineTask(ctx context.Context, accountID, taskID string) error {
+	entry, err := m.get(accountID)
+	if err != nil {
+		return err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("refusing to cancel empty PikPak task ID")
+	}
+	if err := entry.client.Login(ctx); err != nil {
+		return err
+	}
+	if err := entry.client.DeleteOfflineTask(ctx, taskID, true); err != nil {
+		if KindOf(err) == ErrorKindNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) ResolveFiles(ctx context.Context, accountID, rootFileID string) (ResolvedFiles, error) {
@@ -284,6 +308,7 @@ func mapOfflineTask(task offlineTaskAPI) OfflineTask {
 		ID:         task.ID,
 		Status:     task.Phase,
 		RootFileID: task.FileID,
+		Progress:   task.Progress,
 		Error:      task.Message,
 	}
 }

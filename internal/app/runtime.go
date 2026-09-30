@@ -172,6 +172,36 @@ func (r *Runtime) Aria2Snapshots(ctx context.Context) []aria2.InstanceSnapshot {
 	return registry.Snapshots(ctx)
 }
 
+func (r *Runtime) CancelPikPakOffline(ctx context.Context, accountID, taskID string) error {
+	r.mu.RLock()
+	provider := r.provider
+	r.mu.RUnlock()
+	if provider == nil {
+		return errors.New("PikPak runtime is unavailable")
+	}
+	return provider.CancelOfflineTask(ctx, accountID, taskID)
+}
+
+func (r *Runtime) DeletePikPakFile(ctx context.Context, accountID, fileID string) error {
+	r.mu.RLock()
+	provider := r.provider
+	r.mu.RUnlock()
+	if provider == nil {
+		return errors.New("PikPak runtime is unavailable")
+	}
+	return provider.DeletePermanently(ctx, accountID, fileID)
+}
+
+func (r *Runtime) CancelAria2(ctx context.Context, instanceID, gid string) error {
+	r.mu.RLock()
+	registry := r.registry
+	r.mu.RUnlock()
+	if registry == nil {
+		return errors.New("aria2 runtime is unavailable")
+	}
+	return registry.Remove(ctx, instanceID, gid)
+}
+
 func (r *Runtime) DownloadTargets() []config.DownloadTarget {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -268,6 +298,13 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 	if err != nil {
 		return workerSet{}, fmt.Errorf("pikpak.status_interval: %w", err)
 	}
+	stallTimeout, err := time.ParseDuration(cfg.PikPak.StallTimeout)
+	if err != nil {
+		return workerSet{}, fmt.Errorf("pikpak.stall_timeout: %w", err)
+	}
+	if stallTimeout <= 0 {
+		return workerSet{}, fmt.Errorf("pikpak.stall_timeout must be greater than zero")
+	}
 	aria2Status, err := time.ParseDuration(cfg.Aria2.StatusInterval)
 	if err != nil {
 		return workerSet{}, fmt.Errorf("aria2.status_interval: %w", err)
@@ -304,6 +341,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			WorkerInterval:          workerInterval,
 			QuotaRefresh:            quotaRefresh,
 			StatusInterval:          pikpakStatus,
+			StallTimeout:            stallTimeout,
 			RetryInterval:           retryInterval,
 			MaxRetry:                cfg.Scheduler.MaxRetry,
 			MinFreeSpace:            minFreeSpace,

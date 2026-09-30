@@ -60,6 +60,16 @@ func (f *fakeAria2) TellStatus(_ context.Context, instanceID, gid string) (aria2
 	}
 	return aria2.Status{}, errors.New("not found")
 }
+func (f *fakeAria2) Remove(_ context.Context, _ string, gid string) error {
+	if f.added != nil {
+		delete(f.added, gid)
+	}
+	if f.statusByGID != nil {
+		delete(f.statusByGID, gid)
+	}
+	return nil
+}
+
 func (f *fakeAria2) Forget(_ context.Context, _ string, gid string) error {
 	f.forgetCalls++
 	if f.added != nil {
@@ -81,6 +91,9 @@ func (fakeURLProvider) SubmitOffline(context.Context, string, string) (pikpak.Of
 }
 func (fakeURLProvider) GetOfflineTask(context.Context, string, string) (pikpak.OfflineTask, error) {
 	return pikpak.OfflineTask{}, nil
+}
+func (fakeURLProvider) CancelOfflineTask(context.Context, string, string) error {
+	return nil
 }
 func (fakeURLProvider) ResolveFiles(context.Context, string, string) (pikpak.ResolvedFiles, error) {
 	return pikpak.ResolvedFiles{}, nil
