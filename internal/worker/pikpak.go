@@ -226,7 +226,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 			errors.New("PikPak returned an empty offline task ID"))
 	}
 
-	w.noteSubmitSuccess(task.PikPakAccountID, !remote.Existing, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
+	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
 	task.PikPakTaskID = remote.ID
 	if remote.RootFileID != "" {
 		task.PikPakRootFileID = remote.RootFileID
@@ -426,12 +426,12 @@ func (w *Worker) noteSubmitError(id string, err error) {
 	}
 }
 
-func (w *Worker) noteSubmitSuccess(id string, created, active bool) {
+func (w *Worker) noteSubmitSuccess(id string, active bool) {
 	runtime := w.runtime(id)
-	if created && runtime.snapshot.QuotaRemaining > 0 {
+	if runtime.snapshot.QuotaRemaining > 0 {
 		runtime.snapshot.QuotaRemaining--
 	}
-	if created && active {
+	if active {
 		runtime.snapshot.ActiveJobs++
 	}
 	runtime.snapshot.LastUsedAt = time.Now().UTC()
