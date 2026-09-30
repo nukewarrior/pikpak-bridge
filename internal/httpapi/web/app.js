@@ -172,10 +172,6 @@ function aria2Entry(values={}) {
         <label>RPC Secret</label>
         <input data-field="secret" type="password" autocomplete="new-password" value="${esc(values.secret || "")}" placeholder="未设置可留空">
       </div>
-      <div class="field">
-        <label>最大活动任务</label>
-        <input data-field="max_active" type="number" min="1" max="100" value="${esc(values.max_active || 4)}" required>
-      </div>
     </div>`;
   div.querySelector('[data-field="id"]').addEventListener("input", refreshTargetAria2Options);
   div.querySelector('[data-field="name"]').addEventListener("input", refreshTargetAria2Options);
@@ -300,8 +296,7 @@ function collectSetup() {
     id: row.querySelector('[data-field="id"]').value.trim(),
     name: row.querySelector('[data-field="name"]').value.trim(),
     url: row.querySelector('[data-field="url"]').value.trim(),
-    secret: row.querySelector('[data-field="secret"]').value,
-    max_active: Number(row.querySelector('[data-field="max_active"]').value)
+    secret: row.querySelector('[data-field="secret"]').value
   }));
   const targets = [...$("setupTargets").querySelectorAll(".setup-entry")].map(row => ({
     id: row.querySelector('[data-field="id"]').value.trim(),
@@ -476,7 +471,7 @@ async function loadStatus() {
     $("aria2List").innerHTML = instances.length ? instances.map(a => `
       <div class="resource">
         <div class="resource-top"><span class="resource-name">${esc(a.name || a.id)}</span>${resourceBadge(a.enabled && a.healthy, a.enabled ? "OFFLINE" : "DISABLED")}</div>
-        <div class="resource-meta"><span>${esc(a.id)}</span><span>Active <b>${a.active ?? 0}/${a.max_active ?? 0}</b></span></div>
+        <div class="resource-meta"><span>${esc(a.id)}</span><span>Active <b>${a.active ?? 0}</b></span></div>
         <div class="resource-meta"><span>Waiting</span><span>${a.waiting ?? 0}</span></div>
         ${a.error ? `<div class="resource-error">${esc(a.error)}</div>` : ""}
       </div>
