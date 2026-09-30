@@ -43,6 +43,8 @@ Eligible accounts are filtered by health, remaining offline quota, cooldown, act
 
 The worker reserves account capacity before submission so a burst of queued tasks does not all select the same stale account snapshot.
 
+Submission recovery deliberately prioritizes ownership safety. The bridge never adopts an arbitrary existing PikPak offline task merely because its source URL matches. If the process dies in the narrow window after PikPak accepts a submission but before the returned task ID is persisted, the retry may create an extra PikPak task instead of taking ownership of an unrelated one. Persisted PikPak task IDs resume normally.
+
 ### aria2 instances
 
 An aria2 instance represents only an RPC endpoint. aria2 itself owns active/waiting queue and concurrency control:
