@@ -57,18 +57,22 @@ func (s *SQLite) init(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
 			source_type TEXT NOT NULL,
-			source_key TEXT NOT NULL UNIQUE,
+			source_key TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			target_name TEXT NOT NULL,
+			aria2_instance_id TEXT NOT NULL,
+			download_dir TEXT NOT NULL,
 			status TEXT NOT NULL,
-			pikpak_account TEXT NOT NULL DEFAULT '',
+			pikpak_account_id TEXT NOT NULL DEFAULT '',
 			pikpak_task_id TEXT NOT NULL DEFAULT '',
 			pikpak_root_file_id TEXT NOT NULL DEFAULT '',
-			aria2_instance TEXT NOT NULL DEFAULT '',
 			retry_count INTEGER NOT NULL DEFAULT 0,
 			next_attempt_at TEXT,
 			error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			completed_at TEXT
+			completed_at TEXT,
+			UNIQUE(source_key, target_id)
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);`,
@@ -96,7 +100,7 @@ func (s *SQLite) init(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS downloads (
 			task_id TEXT NOT NULL,
 			pikpak_file_id TEXT NOT NULL,
-			aria2_instance TEXT NOT NULL,
+			aria2_instance_id TEXT NOT NULL,
 			aria2_gid TEXT NOT NULL,
 			status TEXT NOT NULL,
 			relative_path TEXT NOT NULL,
@@ -119,61 +123,33 @@ func (s *SQLite) init(ctx context.Context) error {
 			return fmt.Errorf("database init: %w", err)
 		}
 	}
-
-	if err := s.ensureColumn(ctx, "tasks", "retry_count", "INTEGER NOT NULL DEFAULT 0"); err != nil {
-		return err
-	}
-	if err := s.ensureColumn(ctx, "tasks", "next_attempt_at", "TEXT"); err != nil {
-		return err
-	}
 	return nil
 }
 
-func (s *SQLite) ensureColumn(ctx context.Context, table, column, definition string) error {
-	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
-	if err != nil {
-		return err
-	}
-	found := false
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull, pk int
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		if name == column {
-			found = true
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if found {
-		return nil
-	}
-	_, err = s.db.ExecContext(ctx, "ALTER TABLE "+table+" ADD COLUMN "+column+" "+definition)
-	if err != nil {
-		return fmt.Errorf("add %s.%s: %w", table, column, err)
-	}
-	return nil
-}
-
-const taskColumns = `id, source, source_type, source_key, status,
-	pikpak_account, pikpak_task_id, pikpak_root_file_id, aria2_instance,
+const taskColumns = `id, source, source_type, source_key,
+	target_id, target_name, aria2_instance_id, download_dir, status,
+	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
 	retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
 
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO tasks (
-			id, source, source_type, source_key, status,
+			id, source, source_type, source_key,
+			target_id, target_name, aria2_instance_id, download_dir, status,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
-		task.ID, task.Source, task.SourceType, task.SourceKey, string(task.Status),
-		task.CreatedAt.UTC().Format(time.RFC3339Nano), task.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		task.ID,
+		task.Source,
+		task.SourceType,
+		task.SourceKey,
+		task.TargetID,
+		task.TargetName,
+		task.Aria2InstanceID,
+		task.DownloadDir,
+		string(task.Status),
+		task.CreatedAt.UTC().Format(time.RFC3339Nano),
+		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -188,8 +164,11 @@ func (s *SQLite) GetTask(ctx context.Context, id string) (domain.Task, error) {
 	return scan(s.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE id = ?", id))
 }
 
-func (s *SQLite) GetTaskBySourceKey(ctx context.Context, key string) (domain.Task, error) {
-	return scan(s.db.QueryRowContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE source_key = ?", key))
+func (s *SQLite) GetTaskBySourceTarget(ctx context.Context, sourceKey, targetID string) (domain.Task, error) {
+	return scan(s.db.QueryRowContext(ctx,
+		"SELECT "+taskColumns+" FROM tasks WHERE source_key = ? AND target_id = ?",
+		sourceKey, targetID,
+	))
 }
 
 func (s *SQLite) ListTasks(ctx context.Context, limit int) ([]domain.Task, error) {
@@ -251,10 +230,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 	result, err := tx.ExecContext(ctx, `
 		UPDATE tasks SET
 			status = ?,
-			pikpak_account = ?,
+			pikpak_account_id = ?,
 			pikpak_task_id = ?,
 			pikpak_root_file_id = ?,
-			aria2_instance = ?,
 			retry_count = ?,
 			next_attempt_at = ?,
 			error = ?,
@@ -263,10 +241,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 		WHERE id = ?
 	`,
 		string(task.Status),
-		task.PikPakAccount,
+		task.PikPakAccountID,
 		task.PikPakTaskID,
 		task.PikPakRootFileID,
-		task.Aria2Instance,
 		task.RetryCount,
 		nextAttempt,
 		task.Error,
@@ -365,8 +342,6 @@ func (s *SQLite) ListRemoteFiles(ctx context.Context, taskID string) ([]domain.R
 	return out, rows.Err()
 }
 
-
-
 func (s *SQLite) ListFinalizeWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -390,7 +365,6 @@ func (s *SQLite) ListFinalizeWork(ctx context.Context, now time.Time, limit int)
 	return scanTasks(rows)
 }
 
-
 func (s *SQLite) ListAria2Work(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -413,17 +387,17 @@ func (s *SQLite) ListAria2Work(ctx context.Context, now time.Time, limit int) ([
 	return scanTasks(rows)
 }
 
-func (s *SQLite) EnsureDownloads(ctx context.Context, taskID, instance string, gidFor func(string, string) string) error {
+func (s *SQLite) EnsureDownloads(ctx context.Context, taskID, instanceID string, gidFor func(string, string) string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR IGNORE INTO downloads(
-			task_id, pikpak_file_id, aria2_instance, aria2_gid, status,
+			task_id, pikpak_file_id, aria2_instance_id, aria2_gid, status,
 			relative_path, expected_size, created_at, updated_at
 		)
 		SELECT task_id, pikpak_file_id, ?, '', ?, relative_path, size, ?, ?
 		FROM remote_files
 		WHERE task_id = ? AND is_folder = 0
-	`, instance, string(domain.DownloadPending), now, now, taskID)
+	`, instanceID, string(domain.DownloadPending), now, now, taskID)
 	if err != nil {
 		return err
 	}
@@ -465,7 +439,7 @@ func (s *SQLite) EnsureDownloads(ctx context.Context, taskID, instance string, g
 
 func (s *SQLite) ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT task_id, pikpak_file_id, aria2_instance, aria2_gid, status,
+		SELECT task_id, pikpak_file_id, aria2_instance_id, aria2_gid, status,
 		       relative_path, expected_size, total_length, completed_length,
 		       retry_count, next_attempt_at, last_error, created_at, updated_at
 		FROM downloads
@@ -485,7 +459,7 @@ func (s *SQLite) ListDownloads(ctx context.Context, taskID string) ([]domain.Dow
 		if err := rows.Scan(
 			&download.TaskID,
 			&download.PikPakFileID,
-			&download.Aria2Instance,
+			&download.Aria2InstanceID,
 			&download.Aria2GID,
 			&status,
 			&download.RelativePath,
@@ -530,7 +504,7 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 	}
 	result, err := s.db.ExecContext(ctx, `
 		UPDATE downloads SET
-			aria2_instance = ?,
+			aria2_instance_id = ?,
 			aria2_gid = ?,
 			status = ?,
 			relative_path = ?,
@@ -543,7 +517,7 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 			updated_at = ?
 		WHERE task_id = ? AND pikpak_file_id = ?
 	`,
-		download.Aria2Instance,
+		download.Aria2InstanceID,
 		download.Aria2GID,
 		string(download.Status),
 		download.RelativePath,
@@ -570,7 +544,6 @@ func (s *SQLite) SaveDownload(ctx context.Context, download *domain.Download) er
 	return nil
 }
 
-
 func scanTasks(rows *sql.Rows) ([]domain.Task, error) {
 	var out []domain.Task
 	for rows.Next() {
@@ -596,11 +569,14 @@ func scan(row scanner) (domain.Task, error) {
 		&task.Source,
 		&task.SourceType,
 		&task.SourceKey,
+		&task.TargetID,
+		&task.TargetName,
+		&task.Aria2InstanceID,
+		&task.DownloadDir,
 		&status,
-		&task.PikPakAccount,
+		&task.PikPakAccountID,
 		&task.PikPakTaskID,
 		&task.PikPakRootFileID,
-		&task.Aria2Instance,
 		&task.RetryCount,
 		&nextAttemptAt,
 		&task.Error,
