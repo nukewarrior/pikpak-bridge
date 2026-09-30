@@ -483,3 +483,91 @@ func TestRetryRejectsNonFailedTask(t *testing.T) {
 		t.Fatalf("want 409, got %d: %s", res.Code, res.Body.String())
 	}
 }
+
+
+func TestCancelActiveTaskCleansResourcesAndIsTerminal(t *testing.T) {
+	db := openTestStore(t)
+	runtime := &fakeRuntime{}
+	server := New(db, WithRuntime(runtime))
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "cancel-active",
+		Source:          "magnet:?xt=urn:btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+		SourceType:      "magnet",
+		SourceKey:       "btih:CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+		TargetID:        "movies",
+		TargetName:      "Movies",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads/movies",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	task, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task.Status = domain.TaskAria2Downloading
+	task.PikPakAccountID = "pp01"
+	task.PikPakTaskID = "remote-task"
+	task.PikPakRootFileID = "root-file"
+	if err := db.SaveTask(context.Background(), &task, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReplaceRemoteFiles(context.Background(), task.ID, []domain.RemoteFile{{
+		TaskID: task.ID, PikPakFileID: "file-1", Name: "file.bin", RelativePath: "file.bin", Size: 123,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureDownloads(context.Background(), task.ID, "nas", func(_, _ string) string { return "0123456789abcdef" }); err != nil {
+		t.Fatal(err)
+	}
+	downloads, err := db.ListDownloads(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	download := downloads[0]
+	download.Status = domain.DownloadActive
+	if err := db.SaveDownload(context.Background(), &download); err != nil {
+		t.Fatal(err)
+	}
+
+	stale := task
+	res := httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/cancel", nil))
+	if res.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", res.Code, res.Body.String())
+	}
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskCancelled || got.CompletedAt == nil {
+		t.Fatalf("task was not cancelled terminally: %#v", got)
+	}
+	if len(runtime.cancelledPikPak) != 1 || runtime.cancelledPikPak[0] != "pp01:remote-task" {
+		t.Fatalf("PikPak task not cancelled: %#v", runtime.cancelledPikPak)
+	}
+	if len(runtime.deletedPikPak) != 1 || runtime.deletedPikPak[0] != "pp01:root-file" {
+		t.Fatalf("PikPak root not deleted: %#v", runtime.deletedPikPak)
+	}
+	if len(runtime.cancelledAria2) != 1 || runtime.cancelledAria2[0] != "nas:0123456789abcdef" {
+		t.Fatalf("aria2 task not cancelled: %#v", runtime.cancelledAria2)
+	}
+
+	stale.Status = domain.TaskPikPakRunning
+	if err := db.SaveTask(context.Background(), &stale, "", ""); err == nil {
+		t.Fatal("stale worker update revived a cancelled task")
+	}
+	got, err = db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskCancelled {
+		t.Fatalf("cancelled task was revived: %s", got.Status)
+	}
+}
