@@ -25,7 +25,6 @@ type OfflineTask struct {
 	Status     string
 	RootFileID string
 	Error      string
-	Existing   bool
 }
 
 type RemoteFile struct {
