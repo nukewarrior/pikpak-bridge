@@ -242,3 +242,102 @@ func TestWorkerBalancesBurstAcrossAccountCapacity(t *testing.T) {
 		t.Fatalf("want third task waiting for account capacity, got %s", third.Status)
 	}
 }
+
+
+func TestWorkerWaitsForQuotaRefreshWhenAllEnabledAccountsExhausted(t *testing.T) {
+	db, err := store.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC()
+	task := domain.Task{
+		ID:              "quota-wait",
+		Source:          "magnet:?xt=urn:btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		SourceType:      "magnet",
+		SourceKey:       "btih:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		TargetID:        "default",
+		TargetName:      "默认",
+		Aria2InstanceID: "nas",
+		DownloadDir:     "/downloads",
+		Status:          domain.TaskQueued,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := db.CreateTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &poolProvider{snapshots: map[string]pikpak.AccountSnapshot{
+		"pp1": {
+			ID: "pp1", Name: "PikPak 1", Enabled: true, Healthy: true,
+			QuotaRemaining: 0, QuotaTotal: 3, StorageFree: 10_000_000_000, MaxJobs: 2,
+		},
+		"pp2": {
+			ID: "pp2", Name: "PikPak 2", Enabled: true, Healthy: true,
+			QuotaRemaining: 0, QuotaTotal: 10, StorageFree: 10_000_000_000, MaxJobs: 2,
+		},
+	}}
+	quotaRefresh := 5 * time.Minute
+	w := New(db, provider, Options{
+		AccountIDs:    []string{"pp1", "pp2"},
+		QuotaRefresh:  quotaRefresh,
+		RetryInterval: 30 * time.Second,
+		MaxRetry:      3,
+	})
+
+	before := time.Now().UTC()
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.GetTask(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.TaskWaitingPikPakAccount {
+		t.Fatalf("want %s, got %s", domain.TaskWaitingPikPakAccount, got.Status)
+	}
+	if got.Error != allQuotaExhaustedError {
+		t.Fatalf("want quota exhausted error %q, got %q", allQuotaExhaustedError, got.Error)
+	}
+	if got.RetryCount != 0 {
+		t.Fatalf("quota exhaustion must not consume task retries, got %d", got.RetryCount)
+	}
+	if got.NextAttemptAt == nil {
+		t.Fatal("quota exhaustion should schedule the next quota refresh")
+	}
+	wait := got.NextAttemptAt.Sub(before)
+	if wait < quotaRefresh-2*time.Second || wait > quotaRefresh+2*time.Second {
+		t.Fatalf("want next attempt near quota refresh %s, got %s", quotaRefresh, wait)
+	}
+	if len(provider.submits) != 0 {
+		t.Fatalf("quota-exhausted accounts must not receive submissions: %#v", provider.submits)
+	}
+
+	events, err := db.ListTaskEvents(context.Background(), task.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != "pikpak.waiting_quota" {
+		t.Fatalf("want one quota wait event, got %#v", events)
+	}
+
+	past := time.Now().UTC().Add(-time.Second)
+	got.NextAttemptAt = &past
+	if err := db.SaveTask(context.Background(), &got, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RunOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err = db.ListTaskEvents(context.Background(), task.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("repeated quota checks must not duplicate wait events: %#v", events)
+	}
+}
