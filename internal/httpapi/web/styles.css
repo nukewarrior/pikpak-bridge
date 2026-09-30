@@ -1000,3 +1000,105 @@ dialog::backdrop {
   }
   .setup-actions { bottom: 8px; }
 }
+
+
+/* Compact resource editors */
+.setup-screen {
+  width: min(920px, 100%);
+}
+
+.resource-page .setup-entry {
+  padding: 20px 22px 22px;
+}
+
+.resource-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 220px;
+  gap: 14px 16px;
+  align-items: end;
+}
+
+.resource-form .field {
+  min-width: 0;
+}
+
+.resource-form .field label {
+  font-size: 10px;
+  color: #6f7d94;
+}
+
+.resource-form .field input,
+.resource-form .field select {
+  min-height: 44px;
+  font-size: 12px;
+}
+
+.resource-form .field-name {
+  grid-column: 1;
+}
+
+.resource-form .field-enabled {
+  grid-column: 2;
+}
+
+.account-form .field-username,
+.account-form .field-password {
+  grid-column: auto;
+}
+
+.account-form .field-jobs {
+  grid-column: 1;
+  max-width: 300px;
+}
+
+.aria2-form .field-rpc {
+  grid-column: 1 / -1;
+}
+
+.aria2-form .field-secret {
+  grid-column: 1 / -1;
+  max-width: 520px;
+}
+
+.switch-row {
+  min-height: 44px;
+  padding: 0 13px;
+  border: 1px solid #dde5f1;
+  border-radius: 9px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #53617a !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+.switch-row input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+}
+
+.setup-entry-head {
+  margin-bottom: 16px;
+}
+
+.setup-entry-head strong {
+  font-size: 12px;
+}
+
+@media (max-width: 720px) {
+  .resource-form {
+    grid-template-columns: 1fr;
+  }
+
+  .resource-form .field-name,
+  .resource-form .field-enabled,
+  .aria2-form .field-rpc,
+  .aria2-form .field-secret,
+  .account-form .field-jobs {
+    grid-column: 1;
+    max-width: none;
+  }
+}
