@@ -146,6 +146,25 @@ The configuration is saved to:
 /data/config.yaml
 ~~~
 
+## Test a development image
+
+The Docker workflow supports isolated manual tags for development builds without updating `latest`.
+
+In GitHub Actions, open **Docker → Run workflow**, select the development branch, and set an explicit tag such as:
+
+~~~text
+pr-12
+~~~
+
+Then deploy that image with the same Compose file:
+
+~~~bash
+PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12 docker compose pull
+PIKPAK_BRIDGE_IMAGE=ghcr.io/nukewarrior/pikpak-bridge:pr-12 docker compose up -d
+~~~
+
+Only a push to `master` is allowed to publish `latest`. A manual development build always publishes its explicit tag (when supplied) plus the commit `sha-xxxxxxx` tag.
+
 ## API
 
 Create a task for a target:
