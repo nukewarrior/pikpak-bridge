@@ -17,6 +17,7 @@ import (
 
 type pikpakStore interface {
 	ListPikPakWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error)
+	PikPakActiveCounts(ctx context.Context) (map[string]int, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
 	ReplaceRemoteFiles(ctx context.Context, taskID string, files []domain.RemoteFile) error
 }
@@ -26,6 +27,7 @@ type Options struct {
 	WorkerInterval          time.Duration
 	QuotaRefresh            time.Duration
 	StatusInterval          time.Duration
+	StallTimeout            time.Duration
 	RetryInterval           time.Duration
 	MaxRetry                int
 	MinFreeSpace            int64
@@ -61,6 +63,9 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 	if options.StatusInterval <= 0 {
 		options.StatusInterval = 10 * time.Second
 	}
+	if options.StallTimeout <= 0 {
+		options.StallTimeout = 20 * time.Minute
+	}
 	if options.RetryInterval <= 0 {
 		options.RetryInterval = 30 * time.Second
 	}
@@ -88,6 +93,7 @@ func (w *Worker) Run(ctx context.Context) {
 		"worker_interval", w.options.WorkerInterval,
 		"quota_refresh", w.options.QuotaRefresh,
 		"status_interval", w.options.StatusInterval,
+		"stall_timeout", w.options.StallTimeout,
 		"retry_interval", w.options.RetryInterval,
 		"min_free_space", w.options.MinFreeSpace,
 	)
@@ -158,6 +164,11 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		)
 	}
 
+	managedCounts, err := w.store.PikPakActiveCounts(ctx)
+	if err != nil {
+		return err
+	}
+
 	snapshots := make([]pikpak.AccountSnapshot, 0, len(w.options.AccountIDs))
 	for _, id := range w.options.AccountIDs {
 		runtime := w.runtime(id)
@@ -189,8 +200,16 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		if runtime.has && now.Sub(runtime.refreshed) < w.options.QuotaRefresh {
 			snapshot := runtime.snapshot
 			snapshot.CooldownUntil = runtime.cooldown
-			snapshot.ActiveJobs += runtime.reserved
+			remoteActive := snapshot.ActiveJobs
+			snapshot.ActiveJobs = managedCounts[id] + runtime.reserved
 			snapshots = append(snapshots, snapshot)
+			if remoteActive != snapshot.ActiveJobs {
+				slog.Debug("PikPak 并发计数以 Bridge 管理任务为准",
+					"account_id", id,
+					"remote_active_jobs", remoteActive,
+					"managed_active_jobs", snapshot.ActiveJobs,
+				)
+			}
 			continue
 		}
 
@@ -210,7 +229,8 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			continue
 		}
 		w.noteAccountSuccess(id, snapshot, now)
-		snapshot.ActiveJobs += runtime.reserved
+		remoteActive := snapshot.ActiveJobs
+		snapshot.ActiveJobs = managedCounts[id] + runtime.reserved
 		snapshots = append(snapshots, snapshot)
 		slog.Info("PikPak 账号状态已刷新",
 			"account_id", snapshot.ID,
@@ -221,7 +241,8 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 			"quota_remaining", snapshot.QuotaRemaining,
 			"quota_total", snapshot.QuotaTotal,
 			"storage_free", snapshot.StorageFree,
-			"active_jobs", snapshot.ActiveJobs,
+			"remote_active_jobs", remoteActive,
+			"managed_active_jobs", snapshot.ActiveJobs,
 			"max_jobs", snapshot.MaxJobs,
 		)
 	}
