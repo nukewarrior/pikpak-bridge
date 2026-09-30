@@ -39,6 +39,9 @@ type runtimeManager interface {
 	ApplyConfig(context.Context, *config.Config) error
 	AccountIDs() []string
 	RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error)
+	CancelPikPakOffline(context.Context, string, string) error
+	DeletePikPakFile(context.Context, string, string) error
+	CancelAria2(context.Context, string, string) error
 	Aria2Snapshots(context.Context) []aria2.InstanceSnapshot
 	DownloadTargets() []config.DownloadTarget
 	ResolveTarget(string) (config.DownloadTarget, error)
@@ -86,6 +89,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/downloads", s.getTaskDownloads)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/events", s.getTaskEvents)
 	s.mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.retryFailedTask)
+	s.mux.HandleFunc("POST /api/v1/tasks/{id}/cancel", s.cancelTask)
 	s.registerWebUI()
 }
 
@@ -370,6 +374,86 @@ func (s *Server) getTaskEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+}
+
+func (s *Server) cancelTask(w http.ResponseWriter, r *http.Request) {
+	task, err := s.store.GetTask(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get task")
+		return
+	}
+
+	switch task.Status {
+	case domain.TaskCompleted, domain.TaskCancelled,
+		domain.TaskPikPakFailed, domain.TaskAria2Failed,
+		domain.TaskVerifyFailed, domain.TaskCleanupFailed:
+		writeError(w, http.StatusConflict, "only active tasks can be cancelled")
+		return
+	}
+
+	downloads, err := s.store.ListDownloads(r.Context(), task.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list task downloads")
+		return
+	}
+
+	now := time.Now().UTC()
+	task.Status = domain.TaskCancelled
+	task.NextAttemptAt = nil
+	task.CompletedAt = &now
+	task.Error = ""
+	if err := s.store.SaveTask(r.Context(), &task, "task.cancelled", "用户取消任务"); err != nil {
+		writeError(w, http.StatusInternalServerError, "cancel task")
+		return
+	}
+
+	warnings := make([]string, 0, 4)
+	if s.runtime == nil {
+		if task.PikPakTaskID != "" || task.PikPakRootFileID != "" || len(downloads) > 0 {
+			warnings = append(warnings, "runtime unavailable; external resources were not cleaned")
+		}
+	} else {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer cancel()
+
+		if task.PikPakAccountID != "" && task.PikPakTaskID != "" {
+			if err := s.runtime.CancelPikPakOffline(ctx, task.PikPakAccountID, task.PikPakTaskID); err != nil {
+				warnings = append(warnings, "cancel PikPak task: "+err.Error())
+			}
+		}
+
+		for _, download := range downloads {
+			if download.Aria2GID == "" || download.Status == domain.DownloadComplete {
+				continue
+			}
+			if err := s.runtime.CancelAria2(ctx, download.Aria2InstanceID, download.Aria2GID); err != nil {
+				warnings = append(warnings, fmt.Sprintf("cancel aria2 %s: %v", download.Aria2GID, err))
+			}
+		}
+
+		if task.PikPakAccountID != "" && task.PikPakRootFileID != "" {
+			if err := s.runtime.DeletePikPakFile(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
+				warnings = append(warnings, "delete PikPak file: "+err.Error())
+			}
+		}
+	}
+
+	if len(warnings) > 0 {
+		task.Error = strings.Join(warnings, "; ")
+		if err := s.store.SaveTask(r.Context(), &task, "task.cancel_cleanup_failed", task.Error); err != nil {
+			writeError(w, http.StatusInternalServerError, "save cancel cleanup result")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"task":             task,
+		"cleanup_warnings": warnings,
+	})
 }
 
 func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
