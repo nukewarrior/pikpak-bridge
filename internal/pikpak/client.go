@@ -3,6 +3,7 @@ package pikpak
 import (
 	"bytes"
 	"context"
+	"errors"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
