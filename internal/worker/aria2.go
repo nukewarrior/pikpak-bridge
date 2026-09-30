@@ -125,9 +125,6 @@ func (w *Aria2Worker) targetReady(ctx context.Context, task *domain.Task) (bool,
 	if !snapshot.Healthy {
 		return false, w.waitForTarget(ctx, task, "selected aria2 instance is unavailable")
 	}
-	if snapshot.MaxActive <= 0 || snapshot.Active >= snapshot.MaxActive {
-		return false, w.waitForTarget(ctx, task, "selected aria2 instance is at capacity")
-	}
 	return true, nil
 }
 
