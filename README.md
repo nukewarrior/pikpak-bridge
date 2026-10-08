@@ -2,6 +2,10 @@
 
 A lightweight bridge that uses a pool of PikPak accounts for offline downloads and routes completed files to explicit aria2 download targets.
 
+## Documentation
+
+- [Code review and prioritized improvement backlog (2026-10-08, 中文)](docs/code-review-2026-10-08.md)
+
 ## Workflow
 
 ~~~text
