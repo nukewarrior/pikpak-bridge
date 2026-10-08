@@ -757,7 +757,10 @@ async function sendTorrentToBridge(torrentLink, button) {
         setBridgeButtonText(button, '获取目标…');
         const targets = await client.listTargets();
         const selected = await chooseBridgeTarget(targets);
-        if(!selected) return;
+        if(!selected) {
+            setBridgeButtonText(button, originalText);
+            return;
+        }
         setBridgeButtonText(button, '提交中…');
         const task = await client.addTask(magnet, selected.id);
         setBridgeButtonText(button, task.duplicate ? '已存在' : '已提交');
