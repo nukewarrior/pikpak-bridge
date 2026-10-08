@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.0
+// @version      1.3.1
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -58,16 +58,9 @@ const gmc = new GM_config({
             'default': ''
         },
         'BRIDGE_URL': {
-            'section': ['PikPak Bridge', '将种子对应的磁链提交给 pikpak-bridge。与原 Aria2 下载互不影响。只连接你信任的服务地址。'],
+            'section': ['PikPak Bridge', '将种子对应的磁链提交给 pikpak-bridge。下载时自动读取可用目标，无需在脚本中填写目标 ID。与原 Aria2 下载互不影响。'],
             'label': 'Bridge 地址',
             'title': '例如：http://192.168.1.10:8080 或 https://bridge.example.com；不包含 /api/v1/tasks',
-            'labelPos': 'left',
-            'type': 'text',
-            'default': ''
-        },
-        'BRIDGE_TARGET': {
-            'label': '下载目标 ID',
-            'title': '可在 pikpak-bridge 下载目标页面查看 ID；留空使用后端默认目标',
             'labelPos': 'left',
             'type': 'text',
             'default': ''
@@ -508,6 +501,72 @@ class AriaClientLite {
 
 }
 
+const BRIDGE_TARGET_STYLE = `
+.aria2helper-bridge-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483646;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgba(0, 0, 0, 0.55);
+}
+.aria2helper-bridge-dialog {
+    box-sizing: border-box;
+    width: min(440px, 100%);
+    max-height: 85vh;
+    overflow-y: auto;
+    border-radius: 10px;
+    padding: 20px;
+    color: #222;
+    background: #fff;
+    box-shadow: 0 12px 36px rgba(0,0,0,.3);
+    font: 14px/1.5 system-ui, sans-serif;
+}
+.aria2helper-bridge-dialog h3 {
+    margin: 0 0 10px;
+    color: #222;
+    font-size: 18px;
+    font-weight: 600;
+}
+.aria2helper-bridge-dialog p {
+    margin: 0 0 12px;
+    color: #555;
+}
+.aria2helper-bridge-dialog select {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 38px;
+    padding: 6px 10px;
+    background: #fff;
+    color: #222;
+    border: 1px solid #aaa;
+    border-radius: 5px;
+    font-size: 14px;
+}
+.aria2helper-bridge-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 18px;
+}
+.aria2helper-bridge-actions button {
+    cursor: pointer;
+    border: 1px solid #aaa;
+    padding: 7px 14px;
+    border-radius: 5px;
+    background: #f4f4f4;
+    color: #222;
+}
+.aria2helper-bridge-actions .aria2helper-bridge-confirm {
+    background: #168579;
+    border-color: #168579;
+    color: #fff;
+}
+`;
+
 class PikPakBridgeClient {
     constructor(baseURL) {
         const raw = String(baseURL || '').trim();
@@ -522,6 +581,51 @@ class PikPakBridgeClient {
             throw new Error('Bridge 地址必须是无账号、查询参数或片段的 HTTP(S) 地址');
         }
         this.baseURL = url.href.replace(/\/+$/, '');
+    }
+
+    listTargets() {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET',
+                url: this.baseURL + '/api/v1/targets',
+                timeout: 15000,
+                onload: response => {
+                    let data;
+                    try {
+                        data = JSON.parse(response.responseText || '{}');
+                    } catch (_) {
+                        reject(new Error('Bridge 下载目标响应不是合法 JSON（HTTP ' + response.status + '）'));
+                        return;
+                    }
+                    if(response.status !== 200) {
+                        reject(new Error('获取 Bridge 下载目标失败（HTTP ' + response.status + '）：' +
+                            (data.error || '请求失败')));
+                        return;
+                    }
+                    if(!Array.isArray(data.targets)) {
+                        reject(new Error('Bridge 返回的下载目标列表格式无效'));
+                        return;
+                    }
+                    const targets = data.targets
+                        .filter(target => target && typeof target.id === 'string' &&
+                            target.id.trim() && target.enabled !== false)
+                        .map(target => ({
+                            id: target.id.trim(),
+                            name: typeof target.name === 'string' && target.name.trim() ?
+                                target.name.trim() : target.id.trim(),
+                            dir: typeof target.dir === 'string' ? target.dir : '',
+                            default: target.default === true
+                        }));
+                    if(!targets.length) {
+                        reject(new Error('Bridge 没有可用的下载目标，请先在 Bridge 中配置并启用目标'));
+                        return;
+                    }
+                    resolve(targets);
+                },
+                onerror: () => reject(new Error('无法连接 Bridge，请检查服务地址、网络及用户脚本跨域权限')),
+                ontimeout: () => reject(new Error('获取 Bridge 下载目标超时，请确认服务可访问'))
+            });
+        });
     }
 
     addTask(magnet, target = '') {
@@ -566,6 +670,76 @@ function bridgeMagnetFromTorrentLink(link) {
     return magnet;
 }
 
+function chooseBridgeTarget(targets) {
+    if(targets.length === 1) return Promise.resolve(targets[0]);
+
+    return new Promise(resolve => {
+        const previousFocus = document.activeElement;
+        const overlay = document.createElement('div');
+        overlay.className = 'aria2helper-bridge-overlay';
+        const dialog = document.createElement('div');
+        dialog.className = 'aria2helper-bridge-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', '选择 PikPak Bridge 下载目标');
+
+        const title = document.createElement('h3');
+        title.textContent = '选择下载目标';
+        const explanation = document.createElement('p');
+        explanation.textContent = '以下目标实时获取自 PikPak Bridge：';
+        const select = document.createElement('select');
+        select.setAttribute('aria-label', '下载目标');
+        for(const target of targets) {
+            const option = document.createElement('option');
+            option.value = target.id;
+            option.textContent = target.name +
+                (target.default ? '（默认）' : '') +
+                (target.dir ? ' · ' + target.dir : '');
+            select.appendChild(option);
+        }
+        const preferred = targets.find(target => target.default) || targets[0];
+        select.value = preferred.id;
+
+        const actions = document.createElement('div');
+        actions.className = 'aria2helper-bridge-actions';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.textContent = '发送到 PikPak';
+        confirm.className = 'aria2helper-bridge-confirm';
+
+        const finish = value => {
+            document.removeEventListener('keydown', onKeydown, true);
+            overlay.remove();
+            if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+            resolve(value);
+        };
+        const onKeydown = event => {
+            if(event.key === 'Escape') {
+                event.preventDefault();
+                finish(null);
+            }
+        };
+        cancel.onclick = () => finish(null);
+        confirm.onclick = () => finish(targets.find(target => target.id === select.value) || null);
+        overlay.onclick = event => {
+            if(event.target === overlay) finish(null);
+        };
+        actions.appendChild(cancel);
+        actions.appendChild(confirm);
+        dialog.appendChild(title);
+        dialog.appendChild(explanation);
+        dialog.appendChild(select);
+        dialog.appendChild(actions);
+        overlay.appendChild(dialog);
+        document.addEventListener('keydown', onKeydown, true);
+        document.body.appendChild(overlay);
+        select.focus();
+    });
+}
+
 function setBridgeButtonText(button, text) {
     if(button.tagName === 'INPUT') button.value = text;
     else button.textContent = text;
@@ -580,7 +754,12 @@ async function sendTorrentToBridge(torrentLink, button) {
     try {
         const magnet = bridgeMagnetFromTorrentLink(torrentLink);
         const client = new PikPakBridgeClient(gmc.get('BRIDGE_URL'));
-        const task = await client.addTask(magnet, gmc.get('BRIDGE_TARGET'));
+        setBridgeButtonText(button, '获取目标…');
+        const targets = await client.listTargets();
+        const selected = await chooseBridgeTarget(targets);
+        if(!selected) return;
+        setBridgeButtonText(button, '提交中…');
+        const task = await client.addTask(magnet, selected.id);
         setBridgeButtonText(button, task.duplicate ? '已存在' : '已提交');
         button.title = (task.duplicate ? 'Bridge 中已有该任务' : 'Bridge 任务已创建') +
             '：' + task.id + (task.target ? '（目标：' + task.target + '）' : '');
@@ -1222,6 +1401,7 @@ function init() {
     ariaClient = new AriaClientLite({rpc: gmc.get('ARIA2_RPC'), secret: gmc.get('ARIA2_SECRET'), id: ARIA2_CLIENT_ID});
     Tool.addStyle(STYLE);
     Tool.addStyle(ONE_CLICK_STYLE);
+    Tool.addStyle(BRIDGE_TARGET_STYLE);
 
     const monitorTask = new MonitorTask();
     if(GID) {
