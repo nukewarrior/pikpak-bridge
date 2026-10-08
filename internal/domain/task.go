@@ -18,6 +18,7 @@ const (
 	TaskPikPakDeleting       TaskStatus = "PIKPAK_DELETING"
 	TaskCompleted            TaskStatus = "COMPLETED"
 	TaskCancelled            TaskStatus = "CANCELLED"
+	TaskCancelling           TaskStatus = "CANCELLING"
 	TaskPikPakFailed         TaskStatus = "PIKPAK_FAILED"
 	TaskAria2Failed          TaskStatus = "ARIA2_FAILED"
 	TaskVerifyFailed         TaskStatus = "VERIFY_FAILED"
@@ -43,6 +44,7 @@ type Task struct {
 	PikPakProgress       int64      `json:"pikpak_progress"`
 	PikPakLastActivityAt *time.Time `json:"pikpak_last_activity_at,omitempty"`
 
+	CancelPendingSubmission bool `json:"cancel_pending_submission,omitempty"`
 	RetryCount       int        `json:"retry_count"`
 	ManualRetryCount int        `json:"manual_retry_count"`
 	NextAttemptAt    *time.Time `json:"next_attempt_at,omitempty"`
