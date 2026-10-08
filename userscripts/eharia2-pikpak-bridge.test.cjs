@@ -222,9 +222,32 @@ function fakeDocument() {
             get firstElementChild() { return this.children[0] || null; },
             contains(node) { return node === this || this.children.some(child => child.contains(node)); },
             dataset: {},
-            classList: {add() {}, remove() {}, contains() {return false;}},
+            style: {},
+            classList: {
+                items: new Set(),
+                add(...names) { names.forEach(name => this.items.add(name)); },
+                remove(...names) { names.forEach(name => this.items.delete(name)); },
+                contains(name) {return this.items.has(name);}
+            },
             value: '',
-            appendChild(child) { child.parentNode = this; this.children.push(child); },
+            appendChild(child) {
+                if(child.parentNode) {
+                    child.parentNode.children = child.parentNode.children.filter(item => item !== child);
+                }
+                child.parentNode = this;
+                this.children.push(child);
+            },
+            insertBefore(child, reference) {
+                const index=this.children.indexOf(reference);
+                if(index<0) throw new Error('Reference node is not a child');
+                if(child.parentNode) {
+                    child.parentNode.children = child.parentNode.children.filter(item => item !== child);
+                }
+                child.parentNode=this;
+                const position=this.children.indexOf(reference);
+                this.children.splice(position,0,child);
+            },
+            getAttribute(name) {return this[name] || null;},
             remove() {
                 if(this.parentNode) {
                     this.parentNode.children = this.parentNode.children.filter(child => child !== this);
@@ -967,6 +990,110 @@ test('repeated scissors clicks while download is pending do not trigger multiple
     assert.equal(clipboard.length,1);
 });
 
+
+
+test('native torrent page buttons are classified in English and Chinese', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    for(const [label,expected] of [
+        ['Copy Magnet Link','copy'],
+        ['复制磁力链','copy'],
+        ['复制磁力链接','copy'],
+        ['Information','info'],
+        ['详细信息','info'],
+        ['无关操作','']
+    ]) {
+        const node=doc.createElement('input');
+        node.value=label;
+        ctx.testControl=node;
+        assert.equal(evaluate(ctx,'torrentPageNativeActionType(testControl)'),expected,label);
+    }
+    ctx.testControl=doc.createElement('div');
+    ctx.testControl.textContent='Information is a description, not a control';
+    assert.equal(evaluate(ctx,'torrentPageNativeActionType(testControl)'),'');
+});
+
+test('torrent page grid keeps the original native controls and form semantics', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    const form=doc.createElement('form');
+    const host=doc.createElement('td');
+    form.appendChild(host);
+    const nativeCopy=doc.createElement('input');
+    nativeCopy.type='submit';
+    nativeCopy.name='copy_magnet';
+    nativeCopy.value='Copy Magnet Link';
+    let copyCount=0;
+    nativeCopy.onclick=()=>{copyCount++;};
+    const nativeInfo=doc.createElement('button');
+    nativeInfo.type='submit';
+    nativeInfo.name='torrent_info';
+    nativeInfo.textContent='Information';
+    let infoCount=0;
+    nativeInfo.onclick=()=>{infoCount++;};
+    const note=doc.createElement('div');
+    note.textContent='Downloads: 96';
+    ctx.widget=evaluate(ctx,"new SendTaskButton(123, 'https://e-hentai.org/torrent/example.torrent')");
+    const widget=ctx.widget;
+    host.appendChild(note);
+    host.appendChild(widget.element);
+    host.appendChild(nativeCopy);
+    host.appendChild(nativeInfo);
+    ctx.insertionPoint=nativeCopy;
+    const ok=evaluate(ctx,'arrangeTorrentPageActions(insertionPoint, widget)');
+    assert.equal(ok,true);
+    assert.equal(host.children.length,2,'other torrent metadata remains in the original table cell');
+    assert.equal(host.children[0],note);
+    const grid=host.children[1];
+    assert.equal(grid.className,'aria2helper-torrent-actions-grid');
+    assert.deepEqual(grid.children,[widget.element,nativeCopy,nativeInfo]);
+    assert.equal(grid.parentNode,host);
+    assert.equal(form.children[0],host);
+    assert.equal(nativeCopy.type,'submit');
+    assert.equal(nativeInfo.type,'submit');
+    assert.equal(nativeCopy.name,'copy_magnet');
+    assert.equal(nativeInfo.name,'torrent_info');
+    nativeCopy.onclick();nativeInfo.onclick();
+    assert.equal(copyCount,1);
+    assert.equal(infoCount,1);
+    assert.equal(nativeCopy.classList.contains('aria2helper-native-copy'),true);
+    assert.equal(nativeInfo.classList.contains('aria2helper-native-info'),true);
+    assert.equal(widget.button.value,'↓ aria2');
+    assert.equal(widget.bridgeButton.value,'PikPak');
+    assert.equal(widget.button.title,'发送到 aria2');
+    assert.equal(widget.bridgeButton.title,'发送到 PikPak Bridge');
+    assert.equal(evaluate(ctx,'arrangeTorrentPageActions(insertionPoint, widget)'),false);
+    assert.deepEqual(grid.children,[widget.element,nativeCopy,nativeInfo],'repeat activation does not rearrange nodes');
+});
+
+test('torrent page leaves original controls untouched if the required native buttons cannot be identified', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    const host=doc.createElement('td');
+    const widget=evaluate(ctx,"new SendTaskButton(123, 'https://e-hentai.org/torrent/example.torrent')");
+    ctx.widget=widget;
+    const copy=doc.createElement('input');copy.value='Copy Magnet Link';
+    const unrecognized=doc.createElement('input');unrecognized.value='Report issue';
+    host.appendChild(widget.element);
+    host.appendChild(copy);
+    host.appendChild(unrecognized);
+    ctx.insertionPoint=copy;
+    assert.equal(evaluate(ctx,'arrangeTorrentPageActions(insertionPoint, widget)'),false);
+    assert.deepEqual(host.children,[widget.element,copy,unrecognized]);
+    assert.equal(widget.button.value,'发送到Aria2');
+    assert.equal(widget.bridgeButton.value,'发送到 PikPak');
+    assert.equal(copy.title,undefined);
+});
+
+test('torrent page action grid is scoped, two rows by two columns, and preserves handlers', () => {
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[^}]*gap:\s*8px;/s);
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid > \.aria2helper-box\s*\{[^}]*grid-column:\s*1 \/ -1;/s);
+    assert.match(script, /\.aria2helper-native-action\s*\{[^}]*grid-row:\s*2;/s);
+    assert.match(script, /\.aria2helper-native-copy\s*\{\s*grid-column:\s*1;/s);
+    assert.match(script, /\.aria2helper-native-info\s*\{\s*grid-column:\s*2;/s);
+    assert.match(script,/arrangeTorrentPageActions\(insertionPoint, button\);/);
+    assert.doesNotMatch(script, /function arrangeTorrentPageActions[\s\S]*nativeCopy\.onclick\s*=/);
+});
 
 test('torrent buttons have consistent aria2 / copy / PikPak order, accessible titles, and one shared cell', () => {
     const {ctx}=createHarness(()=>{});

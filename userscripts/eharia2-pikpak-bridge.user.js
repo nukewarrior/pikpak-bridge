@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.9
+// @version      1.3.10
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -234,6 +234,80 @@ const STYLE = `
 }
 .gl1t .aria2helper-status{
     margin: 4px 4px;
+}
+
+/* Compact two-by-two actions only on the independent gallerytorrents.php page. */
+#torrentinfo .aria2helper-torrent-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: min(232px, 100%);
+    margin: 8px auto 3px;
+    box-sizing: border-box;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    min-height: 0;
+    line-height: normal;
+    margin: 0;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-button,
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-bridge-button,
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-action {
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    min-height: 34px;
+    height: auto;
+    margin: 0;
+    padding: 5px 4px;
+    border: 1px solid #b3a5a5;
+    border-radius: 6px;
+    text-align: center;
+    font-size: 12px;
+    line-height: 1.45;
+    cursor: pointer;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-button {
+    grid-column: 1;
+    grid-row: 1;
+    background: #548f30;
+    border-color: #477c26;
+    color: #fff;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-bridge-button {
+    grid-column: 2;
+    grid-row: 1;
+    background: #188f83;
+    border-color: #13766c;
+    color: #fff;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-loading,
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-message {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    min-width: 0;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-action {
+    grid-row: 2;
+    background: rgba(160, 160, 160, 0.12);
+    color: inherit;
+    white-space: normal;
+    text-decoration: none;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-copy {
+    grid-column: 1;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-info {
+    grid-column: 2;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-action:hover {
+    background: rgba(160, 160, 160, 0.25);
 }
 `;
 
@@ -2081,6 +2155,50 @@ function getTorrentLink(link) {
 }
 
 
+// Preserve site-native Copy Magnet / Information nodes, form ownership,
+// event handlers and submitted values. Do not reconstruct the original buttons.
+function torrentPageNativeActionType(node) {
+    const tag = node?.tagName?.toUpperCase();
+    if(!['INPUT', 'BUTTON', 'A'].includes(tag)) return '';
+    const label = [node.value, node.textContent, node.title,
+        node.getAttribute?.('aria-label')].filter(Boolean).join(' ');
+    if(/copy\s*(?:magnet|magnetic)|(?:复制|拷贝).*(?:磁|magnet)/i.test(label)) return 'copy';
+    if(/\binformation\b|\binfo\b|(?:详细信息|种子信息|详细资料|详情)/i.test(label)) return 'info';
+    return '';
+}
+
+function arrangeTorrentPageActions(insertionPoint, widget) {
+    const host = insertionPoint?.parentNode;
+    if(!host || !widget?.element || widget.element.parentNode !== host) return false;
+    if(host.classList?.contains('aria2helper-torrent-actions-grid') ||
+       host.className === 'aria2helper-torrent-actions-grid') return false;
+
+    // Only reparent direct siblings inside their existing form/container.
+    // If the native controls aren't identifiable, leave the original layout intact.
+    const native = Array.from(host.children).filter(node => node !== widget.element);
+    const copy = native.find(node => torrentPageNativeActionType(node) === 'copy');
+    const info = native.find(node => torrentPageNativeActionType(node) === 'info');
+    if(!copy || !info || copy === info ||
+        host.querySelector?.('.aria2helper-torrent-actions-grid')) return false;
+
+    const grid = document.createElement('div');
+    grid.className = 'aria2helper-torrent-actions-grid';
+    host.insertBefore(grid, widget.element);
+    grid.appendChild(widget.element);
+    grid.appendChild(copy);
+    grid.appendChild(info);
+    copy.classList.add('aria2helper-native-action', 'aria2helper-native-copy');
+    info.classList.add('aria2helper-native-action', 'aria2helper-native-info');
+    if(!copy.title) copy.title = '复制磁力链';
+    if(!info.title) info.title = '查看种子详细信息';
+
+    widget.button.value = '↓ aria2';
+    widget.button.title = '发送到 aria2';
+    widget.bridgeButton.value = 'PikPak';
+    widget.bridgeButton.title = '发送到 PikPak Bridge';
+    return true;
+}
+
 function init() {
     ariaClient = new AriaClientLite({rpc: gmc.get('ARIA2_RPC'), secret: gmc.get('ARIA2_SECRET'), id: ARIA2_CLIENT_ID});
     Tool.addStyle(STYLE);
@@ -2102,6 +2220,7 @@ function init() {
                     const link = a.href;
                     const button = new SendTaskButton(GID, link, torrentPageFileInfo(table));
                     insertionPoint.parentNode.insertBefore(button.element, insertionPoint);
+                    arrangeTorrentPageActions(insertionPoint, button);
                 });
             }
         }
