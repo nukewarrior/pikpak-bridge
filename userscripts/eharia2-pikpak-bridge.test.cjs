@@ -1060,7 +1060,7 @@ test('torrent page grid keeps the original native controls and form semantics', 
     assert.equal(infoCount,1);
     assert.equal(nativeCopy.classList.contains('aria2helper-native-copy'),true);
     assert.equal(nativeInfo.classList.contains('aria2helper-native-info'),true);
-    assert.equal(widget.button.value,'↓ aria2');
+    assert.equal(widget.button.value,'Aria2');
     assert.equal(widget.bridgeButton.value,'PikPak');
     assert.equal(widget.button.title,'发送到 aria2');
     assert.equal(widget.bridgeButton.title,'发送到 PikPak Bridge');
@@ -1115,7 +1115,7 @@ test('torrent page leaves original controls untouched if the required native but
 });
 
 test('torrent page action grid is scoped, two rows by two columns, and preserves handlers', () => {
-    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*112px\);[^}]*grid-template-rows:\s*38px 38px;[^}]*gap:\s*8px;[^}]*width:\s*232px;[^}]*min-width:\s*232px;/s);
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[^}]*grid-template-rows:\s*38px 38px;[^}]*gap:\s*8px;[^}]*width:\s*232px;[^}]*min-width:\s*232px;/s);
     assert.match(script, /#torrentinfo td\.aria2helper-torrent-actions-cell\s*\{[^}]*width:\s*248px;[^}]*min-width:\s*248px;/s);
     assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid > \.aria2helper-box > \.aria2helper-button[\s\S]*?white-space:\s*nowrap;/);
     assert.doesNotMatch(script, /width:\s*min\(232px,\s*100%\)/);
@@ -1197,4 +1197,12 @@ test('torrent page and popup preserve aria2 and add separate Bridge entries', ()
     assert.match(script, /event\.target\.closest\('.bt-copy-button'\)/);
     assert.match(script, /await copyTorrentMagnetToClipboard\(copyButton\.dataset\.link, copyButton\)/);
     assert.doesNotMatch(script, /event\.target\.parentNode\.contains\("bt-copy-button"\)/);
+});
+
+
+test('torrent page native buttons stretch to equal widths and keep vivid hover text', () => {
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid > \.aria2helper-native-action\s*\{[^}]*justify-self:\s*stretch\s*!important;[^}]*width:\s*100%\s*!important;[^}]*max-width:\s*none\s*!important;/s);
+    assert.match(script, /\.aria2helper-button:hover,[\s\S]*?background:\s*#3c7022\s*!important;[^}]*color:\s*#fff\s*!important;/);
+    assert.match(script, /\.aria2helper-bridge-button:hover,[\s\S]*?background:\s*#11756e\s*!important;[^}]*color:\s*#fff\s*!important;/);
+    assert.doesNotMatch(script, /widget\.button\.value\s*=\s*['"]↓\s*aria2/);
 });
