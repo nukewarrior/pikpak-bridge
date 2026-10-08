@@ -2170,6 +2170,8 @@ function torrentPageNativeActionType(node) {
 function arrangeTorrentPageActions(insertionPoint, widget) {
     const host = insertionPoint?.parentNode;
     if(!host || !widget?.element || widget.element.parentNode !== host) return false;
+    if(host.classList?.contains('aria2helper-torrent-actions-grid') ||
+       host.className === 'aria2helper-torrent-actions-grid') return false;
 
     // Only reparent direct siblings inside their existing form/container.
     // If the native controls aren't identifiable, leave the original layout intact.
