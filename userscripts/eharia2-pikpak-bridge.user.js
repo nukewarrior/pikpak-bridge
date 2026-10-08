@@ -1845,7 +1845,12 @@ class BridgeProgressMonitor {
         return element;
     }
     visibleRecords() {
-        this.views = this.views.filter(v => v.element.isConnected !== false);
+        // Newly created widgets are briefly disconnected until appended to a page.
+        // Only prune views which have actually been mounted and then removed.
+        this.views = this.views.filter(v => {
+            if(v.element.isConnected === true) v.mounted = true;
+            return !v.mounted || v.element.isConnected !== false;
+        });
         const links = new Set(this.views.filter(v => v.kind === 'torrent').map(v => v.key));
         const galleries = new Set(this.views.filter(v => v.kind === 'gallery').map(v => v.key));
         return this.records.filter(r => links.has(r.link) || galleries.has(r.gid));
