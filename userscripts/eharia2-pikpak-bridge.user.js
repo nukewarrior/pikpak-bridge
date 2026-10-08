@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.6
+// @version      1.3.7
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -528,6 +528,57 @@ const BRIDGE_TARGET_STYLE = `
     margin: 0 0 12px;
     color: #555;
 }
+.aria2helper-bridge-dialog .aria2helper-file-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    margin: 14px 0 18px;
+    padding: 13px;
+    border: 1px solid #d8e4e6;
+    border-radius: 8px;
+    background: #f7fafb;
+}
+.aria2helper-bridge-dialog .aria2helper-file-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 50px;
+    flex: 0 0 44px;
+    border-radius: 7px;
+    background: #e4edfb;
+    color: #476ca7;
+    font-size: 15px;
+    font-weight: 750;
+}
+.aria2helper-bridge-dialog .aria2helper-file-details {
+    min-width: 0;
+    flex: 1;
+}
+.aria2helper-bridge-dialog .aria2helper-file-name {
+    display: -webkit-box;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-height: 1.35;
+    color: #252c36;
+    font-size: 14px;
+    font-weight: 650;
+}
+.aria2helper-bridge-dialog .aria2helper-file-meta {
+    display: flex;
+    gap: 6px 14px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 6px;
+    color: #5e6977;
+    font-size: 12px;
+}
+.aria2helper-bridge-dialog .aria2helper-file-meta span {
+    overflow-wrap: anywhere;
+}
 .aria2helper-bridge-dialog select,
 .aria2helper-bridge-dialog input[type="text"] {
     display: block;
@@ -948,7 +999,104 @@ async function submitToAria2(uri, directory) {
     return id;
 }
 
-function chooseAria2Directory(rpc) {
+// Display only metadata that is actually available before a task is created.
+function galleryFileInfo(root = document) {
+    const name = root.querySelector('#gn')?.textContent?.trim() ||
+        root.querySelector('#gj')?.textContent?.trim() || '';
+    const rows = Array.from(root.querySelectorAll('#gdd tr'));
+    let size = '';
+    let pages = '';
+    for(const row of rows) {
+        const label = row.querySelector('.gdt1')?.textContent?.trim() || '';
+        const value = row.querySelector('.gdt2')?.textContent?.trim() || '';
+        if(/^File Size:?\s*$/i.test(label) && value) size = value;
+        if(/^Length:?\s*$/i.test(label) && /^\d[\d,]*\s+pages?\b/i.test(value)) pages = value;
+    }
+    return {name, size, pages};
+}
+
+function torrentFileInfo(item, gid) {
+    if(!item) return null;
+    // Gallery detail metadata belongs only to the gallery currently being viewed.
+    const currentGallery = IS_GALLERY_DETAIL_PAGE && Number(gid) === Number(GID) ?
+        galleryFileInfo() : {};
+    return {
+        name: String(item.name || '').trim(),
+        size: String(item.size || '').trim(),
+        pages: currentGallery.pages || '',
+        kind: 'torrent'
+    };
+}
+
+function torrentPageFileInfo(table) {
+    const link = table?.querySelector('a');
+    if(!link) return null;
+    const text = table.textContent || '';
+    const size = text.match(/\b(?:Size|File Size):\s*([\d,.]+\s*[KMGT]?i?B)\b/i);
+    return {
+        name: (link.textContent || '').trim(),
+        size: size ? size[1].trim() : '',
+        kind: 'torrent'
+    };
+}
+
+function archiveFileInfo(title = '') {
+    const gallery = IS_GALLERY_DETAIL_PAGE ? galleryFileInfo() : {};
+    return {
+        name: String(title || gallery.name || '').trim(),
+        size: gallery.size || '',
+        pages: gallery.pages || '',
+        kind: 'archive'
+    };
+}
+
+function makeDownloadFileInfo(info) {
+    if(!info) return null;
+    const name = String(info.name || '').trim();
+    const size = String(info.size || '').trim();
+    const pages = String(info.pages || '').trim();
+    if(!name && !size && !pages) return null;
+    const card = document.createElement('div');
+    card.className = 'aria2helper-file-info';
+    card.setAttribute('role', 'group');
+    card.setAttribute('aria-label', '待下载文件信息');
+
+    const icon = document.createElement('div');
+    icon.className = 'aria2helper-file-icon';
+    const extension = name.match(/\.([a-z0-9]{2,6})$/i)?.[1]?.toUpperCase();
+    // Torrent info names may describe folders or multi-file downloads; do not assert a ZIP.
+    icon.textContent = info.kind === 'archive' ? 'ZIP' :
+        (extension && ['ZIP', 'RAR', '7Z', 'CBZ'].includes(extension) ? extension : 'BT');
+    card.appendChild(icon);
+
+    const details = document.createElement('div');
+    details.className = 'aria2helper-file-details';
+    if(name) {
+        const filename = document.createElement('div');
+        filename.className = 'aria2helper-file-name';
+        filename.textContent = name;
+        filename.title = name;
+        details.appendChild(filename);
+    }
+    const meta = document.createElement('div');
+    meta.className = 'aria2helper-file-meta';
+    const addMeta = value => {
+        if(!value) return;
+        const span = document.createElement('span');
+        span.textContent = value;
+        meta.appendChild(span);
+    };
+    addMeta(size ? (info.kind === 'archive' ? '画廊参考大小：' : '大小：') + size : '');
+    addMeta(info.kind === 'archive' ? 'ZIP 存档' :
+        (extension && ['ZIP', 'RAR', '7Z', 'CBZ'].includes(extension) ?
+            extension + '（按名称推断）' : 'BT 种子'));
+    addMeta(pages ? '页数：' + pages : '');
+    details.appendChild(meta);
+    card.appendChild(details);
+    return card;
+}
+
+function chooseAria2Directory(rpc, fileInfo = null) {
     const recent = aria2DirectoryHistory(rpc);
     return new Promise(resolve => {
         const previousFocus = document.activeElement;
@@ -1080,6 +1228,8 @@ function chooseAria2Directory(rpc) {
         actions.appendChild(confirm);
         dialog.appendChild(title);
         dialog.appendChild(description);
+        const fileCard = makeDownloadFileInfo(fileInfo);
+        if(fileCard) dialog.appendChild(fileCard);
         dialog.appendChild(field);
         dialog.appendChild(error);
         dialog.appendChild(actions);
@@ -1091,7 +1241,7 @@ function chooseAria2Directory(rpc) {
     });
 }
 
-function chooseBridgeTarget(targets, baseURL) {
+function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
     if(targets.length === 1) return Promise.resolve(targets[0]);
 
     return new Promise(resolve => {
@@ -1150,6 +1300,8 @@ function chooseBridgeTarget(targets, baseURL) {
         actions.appendChild(confirm);
         dialog.appendChild(title);
         dialog.appendChild(explanation);
+        const fileCard = makeDownloadFileInfo(fileInfo);
+        if(fileCard) dialog.appendChild(fileCard);
         dialog.appendChild(select);
         dialog.appendChild(actions);
         overlay.appendChild(dialog);
@@ -1189,7 +1341,7 @@ function setBridgeButtonText(button, text) {
     else button.textContent = text;
 }
 
-async function sendTorrentToBridge(torrentLink, button) {
+async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
     if(button.dataset.bridgeBusy === '1') return;
     const originalText = button.tagName === 'INPUT' ? button.value : button.textContent;
     button.dataset.bridgeBusy = '1';
@@ -1200,7 +1352,7 @@ async function sendTorrentToBridge(torrentLink, button) {
         const client = new PikPakBridgeClient(gmc.get('BRIDGE_URL'));
         setBridgeButtonText(button, '获取目标…');
         const targets = await client.listTargets();
-        const selected = await chooseBridgeTarget(targets, client.baseURL);
+        const selected = await chooseBridgeTarget(targets, client.baseURL, fileInfo);
         if(!selected) {
             setBridgeButtonText(button, originalText);
             return;
@@ -1225,10 +1377,11 @@ async function sendTorrentToBridge(torrentLink, button) {
 }
 
 class SendTaskButton {
-    constructor(gid, link) {
+    constructor(gid, link, fileInfo = null) {
         this.element = document.createElement("div");;
         this.link = link;
         this.gid = gid;
+        this.fileInfo = fileInfo;
 
         this.element.className = "aria2helper-box";
         this.loading = document.createElement("div");
@@ -1249,7 +1402,7 @@ class SendTaskButton {
         this.bridgeButton.value = '发送到 PikPak';
         this.bridgeButton.className = 'stdbtn aria2helper-bridge-button';
         this.bridgeButton.title = '将此种子的磁链交给 pikpak-bridge 处理';
-        this.bridgeButton.onclick = () => sendTorrentToBridge(this.link, this.bridgeButton);
+        this.bridgeButton.onclick = () => sendTorrentToBridge(this.link, this.bridgeButton, this.fileInfo);
         this.element.appendChild(this.bridgeButton);
         this.element.appendChild(this.loading);
         this.element.appendChild(this.message);
@@ -1280,7 +1433,7 @@ class SendTaskButton {
         }
         this.aria2Busy = true;
         try {
-            const dir = await chooseAria2Directory(ariaClient.rpc);
+            const dir = await chooseAria2Directory(ariaClient.rpc, this.fileInfo);
             if(dir === null) return;
             this.showLoading();
             const id = await submitToAria2(getTorrentLink(this.link), dir);
@@ -1549,7 +1702,7 @@ let ariaClient;
 console.log({GID, TOKEN});
 
 
-function oneClickButton(gid, pageLink, archiverLink) {
+function oneClickButton(gid, pageLink, archiverLink, fileInfo = null) {
     const oneClick = document.createElement('div');
     oneClick.textContent = "🡇";
     oneClick.title = "[Aria2] 一键下载";
@@ -1559,7 +1712,7 @@ function oneClickButton(gid, pageLink, archiverLink) {
         if(loading === true) return;
         loading = true;
         try {
-            const dir = await chooseAria2Directory(ariaClient.rpc);
+            const dir = await chooseAria2Directory(ariaClient.rpc, fileInfo);
             if(dir === null) return;
             oneClick.innerHTML = SVG_LOADING_ICON;
             if (pageLink && !archiverLink) {
@@ -1775,7 +1928,8 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                             const bridgeButton = event.target.closest && event.target.closest('.bt-bridge-button');
                             if(bridgeButton && btListBox.contains(bridgeButton)) {
                                 event.preventDefault();
-                                await sendTorrentToBridge(bridgeButton.dataset.link, bridgeButton);
+                                const info = torrentFileInfo(torents.find(item => item.link === bridgeButton.dataset.link), gid);
+                                await sendTorrentToBridge(bridgeButton.dataset.link, bridgeButton, info);
                                 return;
                             }
                             const ariaButton = event.target.closest && event.target.closest('.bt-download-button');
@@ -1784,7 +1938,8 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                                 if(ariaButton.dataset.loading === '1') return;
                                 ariaButton.dataset.loading = '1';
                                 try {
-                                    const dir = await chooseAria2Directory(ariaClient.rpc);
+                                    const info = torrentFileInfo(torents.find(item => item.link === ariaButton.dataset.link), gid);
+                                    const dir = await chooseAria2Directory(ariaClient.rpc, info);
                                     if(dir === null) return;
                                     ariaButton.innerHTML = SVG_LOADING_ICON;
                                     const link = ariaButton.dataset.link;
@@ -1876,7 +2031,7 @@ function init() {
                     let a = table.querySelector('a');
                     if(!a) return;
                     const link = a.href;
-                    const button = new SendTaskButton(GID, link);
+                    const button = new SendTaskButton(GID, link, torrentPageFileInfo(table));
                     insertionPoint.parentNode.insertBefore(button.element, insertionPoint);
                 });
             }
@@ -1886,7 +2041,7 @@ function init() {
             let insertionPoint = document.querySelector("#db a");
             if(!insertionPoint)return;
             const link = insertionPoint.href;
-            const button = new SendTaskButton(GID, link);
+            const button = new SendTaskButton(GID, link, archiveFileInfo());
             button.element.style.marginTop = '16px';
             insertionPoint.parentNode.insertBefore(button.element, insertionPoint);
         }
@@ -1957,7 +2112,7 @@ function init() {
                 const link = a.href;
                 const gid = Tool.urlGetGId(a.href);
                 let gldown = tr.querySelector(".gldown");
-                gldown.appendChild(oneClickButton(gid, link, null));
+                gldown.appendChild(oneClickButton(gid, link, null, archiveFileInfo(a.textContent)));
             })
         }
         if(IS_GALLERY_DETAIL_PAGE) {
@@ -1965,7 +2120,7 @@ function init() {
             const a = document.querySelector(".g2.gsp a");
             const archiverLinkMatch = /'(https:\/\/e.hentai\.org\/archiver\.php?.*?)'/i.exec(a.onclick.toString());
             const archiverLink = Tool.htmlDecodeByRegExp(archiverLinkMatch[1]).replace("--", "-");
-            gldown.appendChild(oneClickButton(GID, null, archiverLink));
+            gldown.appendChild(oneClickButton(GID, null, archiverLink, archiveFileInfo()));
         }
     }
 
