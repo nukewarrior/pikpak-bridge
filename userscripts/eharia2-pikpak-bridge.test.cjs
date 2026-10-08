@@ -854,6 +854,68 @@ test('repeated scissors clicks while download is pending do not trigger multiple
     assert.equal(clipboard.length,1);
 });
 
+
+test('torrent buttons have consistent aria2 / copy / PikPak order, accessible titles, and one shared cell', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.item={link:'https://e-hentai.org/torrent/55/item.torrent'};
+    const html=evaluate(ctx,"torrentActionsCell(item, 55)");
+    assert.equal((html.match(/<td\b/g)||[]).length,1);
+    assert.equal((html.match(/bt-actions-group/g)||[]).length,1);
+    assert.equal((html.match(/data-link=/g)||[]).length,3);
+    assert.equal((html.match(/data-gid="55"/g)||[]).length,3);
+    const classes=['bt-download-button','bt-copy-button','bt-bridge-button'];
+    const indices=classes.map(name=>html.indexOf('class="aria2helper-one-click '+name));
+    // The scissors button retains its extra "icon" class.
+    assert.ok(indices.every(n=>n>=0));
+    assert.ok(indices[0]<indices[1] && indices[1]<indices[2]);
+    assert.match(html,/bt-download-button bt" title="发送到 aria2" aria-label="发送到 aria2"/);
+    assert.match(html,/bt-copy-button icon bt" title="复制磁链" aria-label="复制磁链"/);
+    assert.match(html,/bt-bridge-button bt" title="发送到 PikPak Bridge" aria-label="发送到 PikPak Bridge"/);
+    assert.match(html,/role="group" aria-label="种子操作"/);
+});
+
+test('torrent popup left, right, and two-line tables each render three actions in one cell', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.item={
+        link:'https://e-hentai.org/torrent/55/item.torrent',
+        name:'name.torrent',
+        size:'123 MiB',
+        time:new Date('2026-10-08T10:00:00Z'),
+        readableTime:'1小时前',seeds:3,peers:2,downloads:1
+    };
+    for(const [left,twoLines] of [[true,false],[false,false],[true,true],[false,true]]) {
+        const html=evaluate(ctx, "torrentListRow(item, 55, "+left+", "+twoLines+", () => '')");
+        assert.equal((html.match(/bt-actions-group/g)||[]).length,1,
+            'one button group is rendered per row');
+        assert.equal((html.match(/data-gid="55"/g)||[]).length,3);
+        assert.equal((html.match(/<td\b/g)||[]).length,7,
+            'three actions use one table cell instead of three');
+        const groupPosition=html.indexOf('bt-actions-group');
+        const namePosition=html.indexOf('bt-name');
+        if(twoLines) {
+            assert.match(html,/colspan="6"/);
+            assert.equal((html.match(/<tr\b/g)||[]).length,2);
+            assert.ok(namePosition<groupPosition,'two-line layout keeps name on first row');
+        } else {
+            assert.equal((html.match(/<tr\b/g)||[]).length,1);
+            assert.equal(groupPosition<namePosition,left,'action group position matches side');
+        }
+    }
+});
+
+test('torrent action CSS fixes 8px spacing, circle size and icon centering', () => {
+    assert.match(script, /#btList \.bt-actions-group\s*\{[^}]*display:\s*inline-flex;[^}]*align-items:\s*center;[^}]*gap:\s*8px;/s);
+    assert.match(script, /#btList \.bt-actions-group \.aria2helper-one-click\s*\{[^}]*display:\s*inline-flex;[^}]*justify-content:\s*center;[^}]*width:\s*18px;[^}]*height:\s*18px;/s);
+    assert.match(script, /#btList tr td\.bt-actions-cell\s*\{[^}]*padding:\s*2px 8px;/s);
+    const groupOverride=script.indexOf('#btList tr td.bt-actions-cell');
+    const oldFirstColumnRule=script.indexOf('#btList tr>td:first-of-type');
+    assert.ok(groupOverride>oldFirstColumnRule,
+        'new table cell padding must override first-column style');
+    assert.match(script, /\$\{buttonLeft \? "<th><\/th>" : ""\}/);
+    assert.match(script, /\$\{buttonLeft \? "" : "<th><\/th>"\}/);
+    assert.doesNotMatch(script,/const button1 = \`<td class="bt-button/);
+});
+
 test('torrent page and popup preserve aria2 and add separate Bridge entries', () => {
     assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton, this\.fileInfo\)/);
     assert.match(script, /const bridgeButton = event\.target\.closest/);
