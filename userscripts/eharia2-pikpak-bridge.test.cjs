@@ -639,9 +639,153 @@ test('aria2 popup download uses interactive directory instead of hidden ARIA2_DI
     assert.doesNotMatch(script, /'ARIA2_DIR':\s*\{/);
     assert.doesNotMatch(script, /gmc\.get\('ARIA2_DIR'\)/);
     assert.match(script,/const ariaButton = event\.target\.closest && event\.target\.closest\('\.bt-download-button'\)/);
-    assert.match(script,/await chooseAria2Directory\(ariaClient\.rpc\)/);
+    assert.match(script,/await chooseAria2Directory\(ariaClient\.rpc, info\)/);
     assert.match(script,/const taskId = await submitToAria2\(getTorrentLink\(link\), dir\)/);
     assert.match(script,/const taskId = await submitToAria2\(downloadLink, dir\)/);
+});
+
+
+test('file card contains real torrent name and size, safe text, and leaves missing pages out', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    const malicious='<img src=x onerror=alert(1)> [Pixiv] Gallery.zip';
+    const fileInfo={
+        name:malicious,size:'428.1 MiB',pages:'',kind:'torrent'
+    };
+    ctx.fileInfo=fileInfo;
+    const card=evaluate(ctx,'makeDownloadFileInfo(fileInfo)');
+    assert.equal(card.className,'aria2helper-file-info');
+    assert.equal(card['aria-label'],'待下载文件信息');
+    assert.equal(card.children[0].textContent,'ZIP');
+    assert.equal(card.children[1].children[0].textContent,malicious);
+    assert.equal(card.children[1].children[0].title,malicious);
+    assert.equal(card.children[1].children[1].children[0].textContent,'大小：428.1 MiB');
+    assert.equal(card.children[1].children[1].children[1].textContent,'ZIP（按名称推断）');
+    assert.equal(card.children[1].children[1].children.length,2);
+    const noInfo=evaluate(ctx,"makeDownloadFileInfo({})");
+    assert.equal(noInfo,null);
+});
+
+test('gallery info extracts title, page count, and size without inventing a ZIP length', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    const rows=[
+        {querySelector(selector){return selector==='.gdt1'?{textContent:'Length:'}:{textContent:'10 pages'};}},
+        {querySelector(selector){return selector==='.gdt1'?{textContent:'File Size:'}:{textContent:'428.1 MiB'};}}
+    ];
+    doc.querySelector=selector=>selector==='#gn'?{textContent:'Example Gallery'}
+        : selector==='#gj'?{textContent:'Other Title'}:null;
+    doc.querySelectorAll=selector=>selector==='#gdd tr'?rows:[];
+    const info=evaluate(ctx,"archiveFileInfo()");
+    assert.equal(info.name,'Example Gallery');
+    assert.equal(info.size,'428.1 MiB');
+    assert.equal(info.pages,'10 pages');
+    assert.equal(info.kind,'archive');
+    ctx.fileInfo=info;
+    const card=evaluate(ctx,"makeDownloadFileInfo(fileInfo)");
+    const values=card.children[1].children[1].children.map(child=>child.textContent);
+    assert.deepEqual(values,[
+        '画廊参考大小：428.1 MiB','ZIP 存档','页数：10 pages'
+    ]);
+    assert.equal(card.children[0].textContent,'ZIP');
+    // On gallery list pages without full data, only the name and kind are shown.
+    doc.querySelector=()=>null;
+    doc.querySelectorAll=()=>[];
+    const missing=evaluate(ctx,"archiveFileInfo('List Gallery')");
+    ctx.fileInfo=missing;
+    const fallback=evaluate(ctx,"makeDownloadFileInfo(fileInfo)");
+    assert.equal(fallback.children[1].children[0].textContent,'List Gallery');
+    assert.deepEqual(fallback.children[1].children[1].children.map(x=>x.textContent),['ZIP 存档']);
+});
+
+test('torrent item metadata uses corresponding gallery only and preserves exact popup values', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    doc.querySelector=selector=>selector==='#gn'?{textContent:'Gallery'}:null;
+    doc.querySelectorAll=selector=>selector==='#gdd tr'?[{
+        querySelector(x){return x==='.gdt1'?{textContent:'Length:'}:{textContent:'75 pages'};}
+    }]:[];
+    ctx.item={name:'Actual Torrent Pack.zip',size:'1.2 GiB'};
+    let local=evaluate(ctx,'torrentFileInfo(item,123)');
+    assert.equal(local.name,'Actual Torrent Pack.zip');
+    assert.equal(local.size,'1.2 GiB');
+    assert.equal(local.pages,'75 pages');
+    let external=evaluate(ctx,'torrentFileInfo(item,456)');
+    assert.equal(external.pages,'','gallery page count must not be assigned to another gallery in list');
+});
+
+test('torrent download page reads visible filename and optional size, without inventing missing fields', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.table={
+        textContent:'Uploaded 2026-10-08 Size: 178.2 MiB Seeds: 9',
+        querySelector(selector){return selector==='a'?{textContent:'Named Archive.cbz'}:null;}
+    };
+    const info=evaluate(ctx,'torrentPageFileInfo(table)');
+    assert.equal(info.name,'Named Archive.cbz');
+    assert.equal(info.size,'178.2 MiB');
+    ctx.table.textContent='No reliable size';
+    assert.equal(evaluate(ctx,'torrentPageFileInfo(table)').size,'');
+});
+
+test('aria2 modal shows metadata card between subtitle and input without disturbing directory history', async () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    ctx.fileInfo={name:'Gallery Torrent.zip',size:'800 MiB',kind:'torrent'};
+    const pending=evaluate(ctx,"chooseAria2Directory('rpc-card', fileInfo)");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    assert.equal(dialog.children[2].className,'aria2helper-file-info');
+    assert.equal(dialog.children[3].className,'aria2helper-aria2-dir-field');
+    assert.equal(dialog.children[3].children[0].value,'');
+    dialog.children[3].children[0].value='/newdir';
+    dialog.children[5].children[1].onclick();
+    assert.equal(await pending,'/newdir');
+});
+
+test('PikPak modal shows real torrent metadata and target selection remains functional', async () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    ctx.targets=[{id:'a',name:'Alpha',default:true},{id:'b',name:'Beta'}];
+    ctx.fileInfo={name:'Album.zip',size:'320 MiB',pages:'9 pages',kind:'torrent'};
+    const pending=evaluate(ctx,"chooseBridgeTarget(targets,'https://bridge.test',fileInfo)");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    assert.equal(dialog.children[2].className,'aria2helper-file-info');
+    assert.equal(dialog.children[2].children[1].children[0].textContent,'Album.zip');
+    assert.equal(dialog.children[3].value,'a');
+    dialog.children[3].value='b';
+    dialog.children[4].children[1].onclick();
+    const selection=await pending;
+    assert.equal(selection.id,'b');
+    assert.equal(doc.body.children.length,0);
+});
+
+test('archive download confirmation shows only provided metadata and cancellation avoids fee request', async () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    ctx.aria2Mock={rpc:'rpc1',addUri(){throw new Error('should not submit');}};
+    evaluate(ctx,'ariaClient = aria2Mock');
+    let remoteCalls=0;ctx.fetch=()=>{remoteCalls++;throw new Error('should not fetch')};
+    ctx.fileInfo={name:'Gallery Title',pages:'10 pages',size:'428 MiB',kind:'archive'};
+    const btn=evaluate(ctx,"oneClickButton(123,'https://e-hentai.org/g/123/a/',null,fileInfo)");
+    const pending=btn.onclick();
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    assert.equal(dialog.children[2].children[1].children[0].textContent,'Gallery Title');
+    assert.equal(dialog.children[2].children[1].children[1].children[0].textContent,'画廊参考大小：428 MiB');
+    dialog.children[5].children[0].onclick();
+    await pending;
+    assert.equal(remoteCalls,0);
+});
+
+test('download metadata is threaded through every torrent and gallery action', () => {
+    assert.match(script,/torents\.find\(item => item\.link === bridgeButton\.dataset\.link\)/);
+    assert.match(script,/torents\.find\(item => item\.link === ariaButton\.dataset\.link\)/);
+    assert.match(script,/sendTorrentToBridge\(bridgeButton\.dataset\.link, bridgeButton, info\)/);
+    assert.match(script,/chooseAria2Directory\(ariaClient\.rpc, info\)/);
+    assert.match(script,/new SendTaskButton\(GID, link, torrentPageFileInfo\(table\)\)/);
+    assert.match(script,/oneClickButton\(gid, link, null, archiveFileInfo\(a\.textContent\)\)/);
+    assert.match(script,/oneClickButton\(GID, null, archiverLink, archiveFileInfo\(\)\)/);
 });
 
 test('scissors copies SHA-1 of real torrent info bytes and never submits to Bridge', async () => {
@@ -711,7 +855,7 @@ test('repeated scissors clicks while download is pending do not trigger multiple
 });
 
 test('torrent page and popup preserve aria2 and add separate Bridge entries', () => {
-    assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton\)/);
+    assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton, this\.fileInfo\)/);
     assert.match(script, /const bridgeButton = event\.target\.closest/);
     assert.match(script, /submitToAria2\(getTorrentLink\(link\), dir\)/);
     assert.match(script, /class="aria2helper-one-click bt-bridge-button bt"/);
