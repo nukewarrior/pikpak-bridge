@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.8
+// @version      1.3.9
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -1071,6 +1071,35 @@ function torrentPageFileInfo(table) {
         name: (link.textContent || '').trim(),
         size: size ? size[1].trim() : '',
         kind: 'torrent'
+    };
+}
+
+// Archive one-click buttons on gallery lists may link through a cover image with
+// no text. Read the title from the gallery's own title element, not that cover link.
+function galleryListArchiveFileInfo(row) {
+    if(!row) return {name: '', size: '', pages: '', kind: 'archive'};
+
+    // E-Hentai uses different title wrappers in extended, compact, minimal
+    // and thumbnail layouts. Restrict all lookups to this one gallery item.
+    const titleSelectors = ['.glink', '.gl4t.glname', '.glname a', '.glname'];
+    let name = '';
+    for(const selector of titleSelectors) {
+        const titleNode = row.querySelector(selector);
+        name = titleNode?.textContent?.trim() || '';
+        if(name) break;
+    }
+
+    const text = row.textContent || '';
+    const pageMatch = text.match(/(?:^|\D)(\d[\d,]*)\s+pages?\b/i);
+    // A size without an explicit label may belong to something else on a list.
+    // Do not present it as the archive's size.
+    const sizeMatch = text.match(/\bFile Size\s*:\s*([\d,.]+\s*[KMGT]?i?B)\b/i);
+
+    return {
+        name,
+        size: sizeMatch ? sizeMatch[1].trim() : '',
+        pages: pageMatch ? pageMatch[1] + ' pages' : '',
+        kind: 'archive'
     };
 }
 
@@ -2151,8 +2180,10 @@ function init() {
                 if(!a) return;
                 const link = a.href;
                 const gid = Tool.urlGetGId(a.href);
-                let gldown = tr.querySelector(".gldown");
-                gldown.appendChild(oneClickButton(gid, link, null, archiveFileInfo(a.textContent)));
+                const gldown = tr.querySelector(".gldown");
+                if(!gldown) return;
+                const fileInfo = galleryListArchiveFileInfo(tr);
+                gldown.appendChild(oneClickButton(gid, link, null, fileInfo));
             })
         }
         if(IS_GALLERY_DETAIL_PAGE) {
