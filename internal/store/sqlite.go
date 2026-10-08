@@ -222,10 +222,11 @@ func (s *SQLite) PikPakActiveCounts(ctx context.Context) (map[string]int, error)
 		SELECT pikpak_account_id, COUNT(*)
 		FROM tasks
 		WHERE pikpak_account_id <> ''
-		  AND status IN (?, ?)
+		  AND (status IN (?, ?) OR (status = ? AND pikpak_task_id <> ''))
 		GROUP BY pikpak_account_id`,
 		string(domain.TaskPikPakSubmitting),
 		string(domain.TaskPikPakRunning),
+		string(domain.TaskCancelling),
 	)
 	if err != nil {
 		return nil, err
