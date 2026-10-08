@@ -17,7 +17,8 @@
 
 ## 工作方式
 
-- 从原脚本能识别的种子 URL 提取 40 位 BTIH Hash，构造 `magnet:?` 磁链。
+- 点击发送时，脚本会通过 `GM_xmlhttpRequest` 下载 E-Hentai / ExHentai / EHTracker 的实际 `.torrent` 文件，在本地解析 Bencode 元数据，并对完整的 `info` 字典原始字节计算 SHA-1，生成准确的 BTIH 磁链。**不再将下载 URL 中的标识误当成 BTIH**。
+- 如果种子为纯 BT v2、下载失败、返回登录 HTML 或文件无法解析，会提示错误并停止，不会向 Bridge 提交错误磁链。支持直接传入带 40 位 BTIH 的现成磁链。
 - 发送前调用 `GET {Bridge地址}/api/v1/targets` 获取当前可用目标。如果只有一个目标则直接选中并发送；如果有多个，则显示名称、目录及默认标记供选择；取消选择不会提交任务。
 - `POST {Bridge地址}/api/v1/tasks`，请求体为 `{"url":"magnet:?...","target":"选中的目标 ID"}`。目标 ID 无需手工记录或保存在脚本设置中。
 - HTTP **201** 显示“已提交”；HTTP **409** 携带 `existing_task_id` 时显示“已存在”，不会重复创建。
@@ -34,7 +35,7 @@
 ## 来源和授权
 
 - 原始作者：xioxin、SchneeHertz；原始项目：[EhTagTranslation/UserScripts](https://github.com/EhTagTranslation/UserScripts)
-- 上游版本：EhAria2 v1.2；本地修改版：v1.3.1
+- 上游版本：EhAria2 v1.2；本地修改版：v1.3.2
 - 衍生脚本保留原作者署名并依照 **GNU GPL v3** 分发，许可证全文见 [LICENSE](LICENSE)。此许可声明针对本目录派生的用户脚本，不改变 `pikpak-bridge` 其他独立代码的授权。
 - 后续可通过脚本头部的 `@updateURL` / `@downloadURL` 从本仓库同步更新。
 

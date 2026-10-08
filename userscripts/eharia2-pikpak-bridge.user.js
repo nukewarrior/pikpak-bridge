@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.1
+// @version      1.3.2
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -661,11 +661,157 @@ class PikPakBridgeClient {
     }
 }
 
-function bridgeMagnetFromTorrentLink(link) {
+// E-Hentai torrent URL identifiers are not guaranteed to be BitTorrent info hashes.
+// Extract the exact bencoded "info" bytes from the actual torrent and SHA-1 those bytes.
+function torrentInfoFromBytes(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    if(bytes.length < 8 || bytes.length > 16 * 1024 * 1024) {
+        throw new Error('种子文件为空或超过 16 MiB，拒绝解析');
+    }
+
+    let pos = 0;
+    let nodes = 0;
+    let foundPieces = false;
+    let infoRange = null;
+    let announce = '';
+
+    const isDigit = value => value >= 48 && value <= 57;
+    const isKey = (slice, text) => {
+        if(slice.end - slice.start !== text.length) return false;
+        for(let i = 0; i < text.length; i++) {
+            if(bytes[slice.start + i] !== text.charCodeAt(i)) return false;
+        }
+        return true;
+    };
+    const fail = () => { throw new Error('下载内容不是有效的 BitTorrent 种子文件'); };
+
+    function readString() {
+        if(pos >= bytes.length || !isDigit(bytes[pos])) fail();
+        let size = 0;
+        let digits = 0;
+        while(pos < bytes.length && isDigit(bytes[pos])) {
+            size = size * 10 + bytes[pos++] - 48;
+            if(++digits > 10 || size > bytes.length) fail();
+        }
+        if(bytes[pos++] !== 58 || size > bytes.length - pos) fail();
+        const result = {start: pos, end: pos + size};
+        pos += size;
+        return result;
+    }
+
+    function scanValue(depth, insideInfo = false) {
+        if(depth > 64 || ++nodes > 200000 || pos >= bytes.length) fail();
+        const prefix = bytes[pos];
+        if(isDigit(prefix)) return {type: 'string', ...readString()};
+        if(prefix === 105) { // i<number>e
+            const start = ++pos;
+            while(pos < bytes.length && bytes[pos] !== 101) {
+                if(!isDigit(bytes[pos]) && !(pos === start && bytes[pos] === 45)) fail();
+                pos++;
+            }
+            if(pos === start || pos >= bytes.length) fail();
+            pos++;
+            return {type: 'integer'};
+        }
+        if(prefix !== 100 && prefix !== 108) fail(); // d / l
+        pos++;
+        if(prefix === 100) {
+            while(pos < bytes.length && bytes[pos] !== 101) {
+                const key = readString();
+                const isPieces = insideInfo && isKey(key, 'pieces');
+                const value = scanValue(depth + 1);
+                if(isPieces && value.type === 'string' &&
+                    value.end - value.start > 0 &&
+                    (value.end - value.start) % 20 === 0) {
+                    foundPieces = true;
+                }
+            }
+        } else {
+            while(pos < bytes.length && bytes[pos] !== 101) scanValue(depth + 1);
+        }
+        if(pos >= bytes.length) fail();
+        pos++;
+        return {type: prefix === 100 ? 'dict' : 'list'};
+    }
+
+    if(bytes[pos++] !== 100) fail();
+    while(pos < bytes.length && bytes[pos] !== 101) {
+        const key = readString();
+        const start = pos;
+        const isInfo = isKey(key, 'info');
+        const value = scanValue(1, isInfo);
+        if(isInfo) {
+            if(infoRange || value.type !== 'dict') fail();
+            infoRange = {start, end: pos};
+        } else if(isKey(key, 'announce') && value.type === 'string') {
+            announce = new TextDecoder('utf-8').decode(bytes.subarray(value.start, value.end));
+        }
+    }
+    if(bytes[pos++] !== 101 || pos !== bytes.length || !infoRange || !foundPieces) {
+        throw new Error('种子缺少完整的 BT v1 info/pieces 元数据（暂不支持纯 BT v2 种子）');
+    }
+    return {infoBytes: bytes.subarray(infoRange.start, infoRange.end), announce};
+}
+
+function fetchTorrentBytes(link) {
+    let parsed;
+    try {
+        parsed = new URL(link, window.location.href);
+    } catch (_) {
+        throw new Error('种子下载地址无效');
+    }
+    const host = parsed.hostname.toLowerCase();
+    const permitted = ['e-hentai.org', 'exhentai.org', 'ehtracker.org'];
+    if(!['http:', 'https:'].includes(parsed.protocol) ||
+       parsed.username || parsed.password ||
+       !permitted.some(domain => host === domain || host.endsWith('.' + domain))) {
+        throw new Error('不允许读取非 E-Hentai/ExHentai/EHTracker 的种子链接');
+    }
+
+    return new Promise((resolve, reject) => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: parsed.href,
+            responseType: 'arraybuffer',
+            timeout: 20000,
+            onload: response => {
+                if(response.status !== 200) {
+                    reject(new Error('下载种子文件失败（HTTP ' + response.status + '），请确认种子链接可以访问'));
+                    return;
+                }
+                const body = response.response;
+                if(!body || typeof body.byteLength !== 'number' ||
+                   body.byteLength > 16 * 1024 * 1024) {
+                    reject(new Error('种子文件响应无效或体积超过 16 MiB'));
+                    return;
+                }
+                resolve(body);
+            },
+            onerror: () => reject(new Error('下载种子文件失败，请检查登录状态或跨域访问权限')),
+            ontimeout: () => reject(new Error('下载种子文件超时'))
+        });
+    });
+}
+
+async function bridgeMagnetFromTorrentLink(link) {
     const source = String(link || '').trim();
-    const magnet = /^magnet:\?/i.test(source) ? source : torrentLink2magnet(source);
-    if(!magnet || !/^magnet:\?/i.test(magnet) || !/urn:btih:[a-f0-9]{40}(?![a-z0-9])/i.test(magnet)) {
-        throw new Error('无法从当前种子链接提取 40 位 BTIH 磁链，未提交任务');
+    if(/^magnet:\?/i.test(source)) {
+        if(!/urn:btih:[a-f0-9]{40}(?![a-z0-9])/i.test(source)) {
+            throw new Error('磁链缺少有效的 40 位 BTIH');
+        }
+        return source;
+    }
+    const downloaded = await fetchTorrentBytes(source);
+    const {infoBytes, announce} = torrentInfoFromBytes(downloaded);
+    if(!globalThis.crypto || !globalThis.crypto.subtle) {
+        throw new Error('当前页面不支持 Web Crypto API，无法计算 BTIH');
+    }
+    const digest = await globalThis.crypto.subtle.digest('SHA-1', infoBytes);
+    const hash = Array.from(new Uint8Array(digest), byte =>
+        byte.toString(16).padStart(2, '0')).join('').toUpperCase();
+    let magnet = 'magnet:?xt=urn:btih:' + hash;
+    if(/^https?:\/\/\S+|^udp:\/\/\S+/i.test(announce)) {
+        magnet += '&tr=' + encodeURIComponent(announce);
     }
     return magnet;
 }
@@ -752,7 +898,7 @@ async function sendTorrentToBridge(torrentLink, button) {
     if('disabled' in button) button.disabled = true;
     setBridgeButtonText(button, '发送中…');
     try {
-        const magnet = bridgeMagnetFromTorrentLink(torrentLink);
+        const magnet = await bridgeMagnetFromTorrentLink(torrentLink);
         const client = new PikPakBridgeClient(gmc.get('BRIDGE_URL'));
         setBridgeButtonText(button, '获取目标…');
         const targets = await client.listTargets();
