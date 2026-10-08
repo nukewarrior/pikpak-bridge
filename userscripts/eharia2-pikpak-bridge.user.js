@@ -1865,8 +1865,10 @@ class BridgeProgressMonitor {
             const selected = running || entries[0];
             const task = this.tasks.get(selected.id);
             const progress = task ? bridgeProgressOf(task, this.downloads.get(selected.id) || []) : null;
+            const errorHint = progress?.error ?
+                ' · ' + progress.error.slice(0, 48) + (progress.error.length > 48 ? '…' : '') : '';
             view.label.textContent = (view.kind === 'gallery' ? 'PikPak (' + entries.length + '项) · ' : 'PikPak · ') +
-                (progress ? progress.label : '查询任务中…');
+                (progress ? progress.label : '查询任务中…') + errorHint;
             view.element.dataset.state = progress?.state || 'active';
             view.element.title = progress?.error ?
                 progress.label + '：' + progress.error : view.label.textContent;
