@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.5
+// @version      1.3.6
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -541,16 +541,102 @@ const BRIDGE_TARGET_STYLE = `
     border-radius: 5px;
     font-size: 14px;
 }
-.aria2helper-aria2-dir-dialog label {
+.aria2helper-aria2-dir-dialog {
+    width: min(520px, 100%);
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-field {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    min-height: 44px;
+    margin-top: 18px;
+    border: 1px solid #aaa;
+    border-radius: 7px;
+    background: #fff;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-field:focus-within {
+    border-color: #168579;
+    box-shadow: 0 0 0 2px rgba(22, 133, 121, 0.12);
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-field input[type="text"] {
+    flex: 1 1 auto;
+    width: 1px;
+    min-width: 0;
+    min-height: 44px;
+    margin: 0;
+    border: 0;
+    outline: 0;
+    box-shadow: none;
+    border-radius: 7px 0 0 7px;
+    background: transparent;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 46px;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid #ddd;
+    border-radius: 0 7px 7px 0;
+    background: #f8f8f8;
+    color: #667080;
+    cursor: pointer;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-toggle:hover:not(:disabled) {
+    background: #eef5f3;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-toggle:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-toggle svg {
+    width: 20px;
+    height: 20px;
+    pointer-events: none;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-list {
+    position: absolute;
+    z-index: 10;
+    top: calc(100% + 5px);
+    left: 0;
+    right: 0;
+    max-height: min(240px, 32vh);
+    overflow-y: auto;
+    padding: 5px;
+    border: 1px solid #ddd;
+    border-radius: 7px;
+    background: #fff;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.16);
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-list[hidden] {
+    display: none;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-list button {
     display: block;
-    font-weight: 600;
-    margin: 12px 0 5px;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 9px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    text-align: left;
+    font: inherit;
+    color: #222;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-list button:hover,
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-history-list button:focus-visible {
+    background: #edf6f4;
 }
 .aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-error {
-    min-height: 18px;
     color: #bf3030;
     font-size: 12px;
-    margin-top: 5px;
+    margin-top: 6px;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-error:empty {
+    display: none;
 }
 .aria2helper-bridge-actions {
     display: flex;
@@ -873,45 +959,70 @@ function chooseAria2Directory(rpc) {
         dialog.setAttribute('role', 'dialog');
         dialog.setAttribute('aria-modal', 'true');
         dialog.setAttribute('aria-label', '选择 aria2 保存位置');
+
         const title = document.createElement('h3');
         title.textContent = '选择 aria2 保存位置';
         const description = document.createElement('p');
         description.textContent = '请输入 aria2 服务器上的保存目录：';
-        const label = document.createElement('label');
-        label.textContent = '保存目录';
+
+        // One combined row: editable directory input + icon-only history button.
+        const field = document.createElement('div');
+        field.className = 'aria2helper-aria2-dir-field';
         const directory = document.createElement('input');
         directory.type = 'text';
         directory.setAttribute('aria-label', 'aria2 保存目录');
         directory.setAttribute('placeholder', '例如 /downloads');
         directory.value = recent[0] || '';
-        label.appendChild(directory);
-        dialog.appendChild(title);
-        dialog.appendChild(description);
-        dialog.appendChild(label);
+        field.appendChild(directory);
 
-        if(recent.length) {
-            const historyLabel = document.createElement('label');
-            historyLabel.textContent = '最近使用';
-            const select = document.createElement('select');
-            select.setAttribute('aria-label', '最近使用的 aria2 保存目录');
-            for(const path of recent) {
-                const option = document.createElement('option');
-                option.value = path;
-                option.textContent = path;
-                select.appendChild(option);
-            }
-            select.value = recent[0];
-            select.onchange = () => {
-                directory.value = select.value;
-                error.textContent = '';
-            };
-            historyLabel.appendChild(select);
-            dialog.appendChild(historyLabel);
-        }
+        const historyButton = document.createElement('button');
+        historyButton.type = 'button';
+        historyButton.className = 'aria2helper-aria2-dir-history-toggle';
+        historyButton.setAttribute('aria-label', '选择历史保存目录');
+        historyButton.setAttribute('aria-haspopup', 'menu');
+        historyButton.setAttribute('aria-expanded', 'false');
+        historyButton.title = recent.length ? '选择历史保存目录' : '暂无历史保存目录';
+        historyButton.disabled = recent.length === 0;
+        historyButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>';
+        field.appendChild(historyButton);
+
+        const historyList = document.createElement('div');
+        historyList.className = 'aria2helper-aria2-dir-history-list';
+        historyList.hidden = true;
+        historyList.setAttribute('role', 'menu');
+        historyList.setAttribute('aria-label', '历史保存目录');
         const error = document.createElement('div');
         error.className = 'aria2helper-aria2-dir-error';
         error.setAttribute('role', 'status');
-        dialog.appendChild(error);
+
+        const setHistoryOpen = open => {
+            historyList.hidden = !open;
+            historyButton.setAttribute('aria-expanded', String(open));
+            if(open && historyList.firstElementChild) historyList.firstElementChild.focus();
+        };
+        for(const path of recent) {
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.setAttribute('role', 'menuitem');
+            item.textContent = path;
+            item.onclick = () => {
+                directory.value = path;
+                error.textContent = '';
+                setHistoryOpen(false);
+                directory.focus();
+            };
+            historyList.appendChild(item);
+        }
+        historyButton.onclick = () => {
+            if(historyButton.disabled) return;
+            setHistoryOpen(historyList.hidden);
+        };
+        directory.oninput = () => {
+            error.textContent = '';
+            if(!historyList.hidden) setHistoryOpen(false);
+        };
+        field.appendChild(historyList);
+
         const actions = document.createElement('div');
         actions.className = 'aria2helper-bridge-actions';
         const cancel = document.createElement('button');
@@ -927,6 +1038,7 @@ function chooseAria2Directory(rpc) {
             if(closed) return;
             closed = true;
             document.removeEventListener('keydown', onKeydown, true);
+            document.removeEventListener('pointerdown', onOutsideHistory, true);
             overlay.remove();
             if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
             resolve(value);
@@ -943,23 +1055,37 @@ function chooseAria2Directory(rpc) {
         const onKeydown = event => {
             if(event.key === 'Escape') {
                 event.preventDefault();
-                finish(null);
+                if(!historyList.hidden) {
+                    setHistoryOpen(false);
+                    historyButton.focus();
+                } else {
+                    finish(null);
+                }
             } else if(event.key === 'Enter' && (event.target === directory || event.target === confirm)) {
                 event.preventDefault();
                 submit();
             }
         };
+        const onOutsideHistory = event => {
+            if(!historyList.hidden && event.target !== historyButton && !historyList.contains(event.target)) {
+                setHistoryOpen(false);
+            }
+        };
         cancel.onclick = () => finish(null);
         confirm.onclick = submit;
-        directory.oninput = () => { error.textContent = ''; };
         overlay.onclick = event => {
             if(event.target === overlay) finish(null);
         };
         actions.appendChild(cancel);
         actions.appendChild(confirm);
+        dialog.appendChild(title);
+        dialog.appendChild(description);
+        dialog.appendChild(field);
+        dialog.appendChild(error);
         dialog.appendChild(actions);
         overlay.appendChild(dialog);
         document.addEventListener('keydown', onKeydown, true);
+        document.addEventListener('pointerdown', onOutsideHistory, true);
         document.body.appendChild(overlay);
         directory.focus();
     });

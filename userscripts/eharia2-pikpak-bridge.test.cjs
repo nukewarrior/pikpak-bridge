@@ -210,6 +210,7 @@ function fakeDocument() {
             if(listeners.get(event) === handler) listeners.delete(event);
         },
         dispatchKey(event) { listeners.get('keydown')?.(event); },
+        dispatchPointer(event) { listeners.get('pointerdown')?.(event); },
         listeners
     };
     return doc;
@@ -218,6 +219,8 @@ function fakeDocument() {
         return {
             tagName: tagName.toUpperCase(),
             children: [],
+            get firstElementChild() { return this.children[0] || null; },
+            contains(node) { return node === this || this.children.some(child => child.contains(node)); },
             dataset: {},
             classList: {add() {}, remove() {}, contains() {return false;}},
             value: '',
@@ -425,7 +428,13 @@ test('aria2 directory dialog is required on first use and cancellation is harmle
     assert.equal(dialog['role'],'dialog');
     const input=dialog.children[2].children[0];
     assert.equal(input.value,'');
-    assert.equal(dialog.children.length,5,'no history selector on first use');
+    assert.equal(dialog.children.length,5,'one input row, no separate history row');
+    const field=dialog.children[2];
+    assert.equal(field.children.length,3,'input, history icon and popup menu share one row');
+    assert.equal(field.children[1].disabled,true,'clock is disabled before any download history');
+    assert.equal(field.children[2].hidden,true);
+    assert.match(field.children[1].innerHTML, /<svg/);
+    assert.doesNotMatch(dialog.children.map(child=>child.textContent || '').join(' '), /最近使用/);
     const confirm=dialog.children[4].children[1];
     confirm.onclick();
     assert.equal(doc.body.children.length,1,'cannot submit an empty directory');
@@ -482,25 +491,90 @@ test('aria2 directory history is capped at 10, strips blanks and tolerates damag
     assert.equal(storage.get('ARIA2_DIR_HISTORY:test').length,10);
 });
 
-test('aria2 dialog pre-fills last used directory, offers history and permits a new path', async () => {
+test('aria2 compact directory row opens clock history, fills selected path and still accepts new input', async () => {
     const storage=new Map([['ARIA2_DIR_HISTORY:rpc1',['/downloads/last','/downloads/old']]]);
     const {ctx}=createHarness(()=>{},storage);
     const doc=fakeDocument();ctx.document=doc;
     const chooser=evaluate(ctx,"chooseAria2Directory('rpc1')");
     await waitForDialog(doc);
     const dialog=doc.body.children[0].children[0];
-    const input=dialog.children[2].children[0];
-    const select=dialog.children[3].children[0];
+    const field=dialog.children[2];
+    const input=field.children[0];
+    const clock=field.children[1];
+    const menu=field.children[2];
+    assert.equal(dialog.children.length,5,'compact layout has one input row');
     assert.equal(input.value,'/downloads/last');
-    assert.equal(select.children.length,2);
-    assert.equal(select.children[1].textContent,'/downloads/old');
-    select.value='/downloads/old';
-    select.onchange();
+    assert.equal(clock.disabled,false);
+    assert.equal(clock['aria-label'],'选择历史保存目录');
+    assert.match(clock.innerHTML, /<svg/);
+    assert.equal(clock.textContent || '', '');
+    assert.equal(menu.hidden,true);
+    assert.equal(menu.children.length,2);
+    assert.equal(menu.children[1].textContent,'/downloads/old');
+    assert.equal(clock['aria-expanded'],'false');
+    clock.onclick();
+    assert.equal(menu.hidden,false);
+    assert.equal(clock['aria-expanded'],'true');
+    menu.children[1].onclick();
     assert.equal(input.value,'/downloads/old');
+    assert.equal(menu.hidden,true);
+    assert.equal(clock['aria-expanded'],'false');
     input.value='/downloads/new';
-    dialog.children[5].children[1].onclick();
+    dialog.children[4].children[1].onclick();
     assert.equal(await chooser,'/downloads/new');
+    assert.equal(doc.listeners.size,0,'keyboard and pointer listeners are cleaned up');
     assert.deepEqual(storage.get('ARIA2_DIR_HISTORY:rpc1'),['/downloads/last','/downloads/old'], 'choosing without accepted download should not modify history');
+});
+
+test('aria2 history popup toggles, Escape closes menu first and outside click dismisses popup', async () => {
+    const {ctx}=createHarness(()=>{},new Map([['ARIA2_DIR_HISTORY:rpc2',['/d1','/d2']]]));
+    const doc=fakeDocument();ctx.document=doc;
+    const chooser=evaluate(ctx,"chooseAria2Directory('rpc2')");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    const field=dialog.children[2];
+    const input=field.children[0];
+    const clock=field.children[1];
+    const menu=field.children[2];
+    clock.onclick();
+    assert.equal(menu.hidden,false);
+    clock.onclick();
+    assert.equal(menu.hidden,true);
+    clock.onclick();
+    doc.dispatchKey({key:'Escape',target:menu.children[0],preventDefault() {}});
+    assert.equal(menu.hidden,true);
+    assert.equal(doc.body.children.length,1,'Escape with history open must not cancel the directory dialog');
+    clock.onclick();
+    doc.dispatchPointer({target:input});
+    assert.equal(menu.hidden,true);
+    clock.onclick();
+    doc.dispatchPointer({target:menu.children[1]});
+    assert.equal(menu.hidden,false,'clicking a menu item must not be dismissed before selection');
+    menu.children[0].onclick();
+    assert.equal(input.value,'/d1');
+    doc.dispatchKey({key:'Escape',target:input,preventDefault() {}});
+    assert.equal(await chooser,null);
+    assert.equal(doc.body.children.length,0);
+    assert.equal(doc.listeners.size,0);
+});
+
+test('editing input closes aria2 history and never overwrites the typed path', async () => {
+    const {ctx}=createHarness(()=>{},new Map([['ARIA2_DIR_HISTORY:rpc3',['/a','/b']]]));
+    const doc=fakeDocument();ctx.document=doc;
+    const chooser=evaluate(ctx,"chooseAria2Directory('rpc3')");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    const field=dialog.children[2];
+    const input=field.children[0];
+    const clock=field.children[1];
+    const menu=field.children[2];
+    clock.onclick();
+    input.value='/typed-new-path';
+    input.oninput();
+    assert.equal(menu.hidden,true);
+    assert.equal(input.value,'/typed-new-path');
+    dialog.children[4].children[1].onclick();
+    assert.equal(await chooser,'/typed-new-path');
 });
 
 test('failed aria2 RPC preserves directory history and does not report success', async () => {
@@ -540,7 +614,7 @@ test('torrent page aria2 button prompts for directory and preserves cancellation
     assert.equal(storage.get('ARIA2_DIR_HISTORY:rpc1')[0],'/downloads/torrent');
     const canceled=evaluate(ctx,'SendTaskButton.prototype.buttonClick.call(testObj)');
     await waitForDialog(doc);
-    doc.body.children[0].children[0].children[5].children[0].onclick();
+    doc.body.children[0].children[0].children[4].children[0].onclick();
     await canceled;
     assert.equal(calls.length,1,'no aria2 task should be created when selection is cancelled');
 });
