@@ -261,7 +261,7 @@ func (r *Runtime) prepare(cfg *config.Config) (*pikpak.Manager, *aria2.Registry,
 func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, registry *aria2.Registry, workers workerSet) {
 	workerCtx, cancel := context.WithCancel(r.parent)
 	wg := &sync.WaitGroup{}
-	wg.Add(3)
+	wg.Add(4)
 
 	r.cancel = cancel
 	r.workersWG = wg
@@ -281,12 +281,17 @@ func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, r
 		defer wg.Done()
 		workers.finalizer.Run(workerCtx)
 	}()
+	go func() {
+		defer wg.Done()
+		workers.canceller.Run(workerCtx)
+	}()
 }
 
 type workerSet struct {
 	pikpak    *worker.Worker
 	aria2     *worker.Aria2Worker
 	finalizer *worker.Finalizer
+	canceller *worker.Canceller
 }
 
 func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider, backend aria2.Backend) (workerSet, error) {
@@ -335,8 +340,10 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 		accountIDs = append(accountIDs, account.ID)
 	}
 
+	locks := worker.NewTaskLocks()
 	return workerSet{
 		pikpak: worker.New(db, provider, worker.Options{
+			Locks: locks,
 			AccountIDs:              accountIDs,
 			WorkerInterval:          workerInterval,
 			QuotaRefresh:            quotaRefresh,
@@ -349,12 +356,14 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			AccountCooldown:         accountCooldown,
 		}),
 		aria2: worker.NewAria2(db, provider, backend, worker.Aria2Options{
+			Locks: locks,
 			WorkerInterval: workerInterval,
 			StatusInterval: aria2Status,
 			RetryInterval:  retryInterval,
 			MaxRetry:       cfg.Scheduler.MaxRetry,
 		}),
 		finalizer: worker.NewFinalizer(db, provider, worker.FinalizeOptions{
+			Locks: locks,
 			WorkerInterval: workerInterval,
 			RetryInterval:  retryInterval,
 			MaxRetry:       cfg.Scheduler.MaxRetry,
@@ -362,6 +371,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			CleanupEnabled: cfg.Cleanup.Enabled,
 			CleanupDelay:   cleanupDelay,
 		}),
+		canceller: worker.NewCanceller(db, provider, backend, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
 	}, nil
 }
 

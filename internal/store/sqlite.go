@@ -76,7 +76,8 @@ func (s *SQLite) init(ctx context.Context) error {
 			error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			completed_at TEXT
+			completed_at TEXT,
+			cancel_pending_submission INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);`,
@@ -135,7 +136,8 @@ const taskColumns = `id, source, source_type, source_key, name,
 	target_id, target_name, aria2_instance_id, download_dir, status,
 	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
 	pikpak_phase, pikpak_progress, pikpak_last_activity_at,
-	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at`
+	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at,
+	cancel_pending_submission`
 
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -220,10 +222,11 @@ func (s *SQLite) PikPakActiveCounts(ctx context.Context) (map[string]int, error)
 		SELECT pikpak_account_id, COUNT(*)
 		FROM tasks
 		WHERE pikpak_account_id <> ''
-		  AND status IN (?, ?)
+		  AND (status IN (?, ?) OR (status = ? AND pikpak_task_id <> ''))
 		GROUP BY pikpak_account_id`,
 		string(domain.TaskPikPakSubmitting),
 		string(domain.TaskPikPakRunning),
+		string(domain.TaskCancelling),
 	)
 	if err != nil {
 		return nil, err
@@ -305,6 +308,7 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 			updated_at = ?,
 			completed_at = ?
 		WHERE id = ?
+		  AND (status <> ? OR ? IN (?, ?))
 		  AND (status <> ? OR ? = ?)
 	`,
 		task.Name,
@@ -322,6 +326,10 @@ func (s *SQLite) SaveTask(ctx context.Context, task *domain.Task, eventType, mes
 		task.UpdatedAt.Format(time.RFC3339Nano),
 		completedAt,
 		task.ID,
+		string(domain.TaskCancelling),
+		string(task.Status),
+		string(domain.TaskCancelling),
+		string(domain.TaskCancelled),
 		string(domain.TaskCancelled),
 		string(task.Status),
 		string(domain.TaskCancelled),
@@ -415,6 +423,54 @@ func (s *SQLite) ListRemoteFiles(ctx context.Context, taskID string) ([]domain.R
 		out = append(out, file)
 	}
 	return out, rows.Err()
+}
+
+// RequestCancel freezes new transitions while remote operations already in flight finish.
+func (s *SQLite) RequestCancel(ctx context.Context, id string) (domain.Task, error) {
+ tx, err := s.db.BeginTx(ctx, nil)
+ if err != nil { return domain.Task{}, err }
+ defer tx.Rollback()
+ now := time.Now().UTC().Format(time.RFC3339Nano)
+ result, err := tx.ExecContext(ctx, "UPDATE tasks SET status = ?, error = '', retry_count = 0, next_attempt_at = NULL, updated_at = ?, cancel_pending_submission = CASE WHEN status = ? AND pikpak_task_id = '' THEN 1 ELSE 0 END WHERE id = ? AND status NOT IN (?, ?, ?, ?, ?, ?, ?)",
+  string(domain.TaskCancelling), now, string(domain.TaskPikPakSubmitting), id,
+  string(domain.TaskCancelling), string(domain.TaskCancelled), string(domain.TaskCompleted),
+  string(domain.TaskPikPakFailed), string(domain.TaskAria2Failed), string(domain.TaskVerifyFailed), string(domain.TaskCleanupFailed))
+ if err != nil { return domain.Task{}, err }
+ count, err := result.RowsAffected()
+ if err != nil { return domain.Task{}, err }
+ if count != 1 { return domain.Task{}, sql.ErrNoRows }
+ if _, err = tx.ExecContext(ctx, "INSERT INTO events(task_id, type, message, created_at) VALUES (?, ?, ?, ?)",
+  id, "task.cancel_requested", "用户请求取消；等待后台远端清理", now); err != nil { return domain.Task{}, err }
+ if err = tx.Commit(); err != nil { return domain.Task{}, err }
+ return s.GetTask(ctx, id)
+}
+
+// Persist an accepted remote submission without overwriting CANCELLING.
+func (s *SQLite) RecordPikPakSubmission(ctx context.Context, taskID, accountID, remoteID, rootID string) error {
+ if remoteID == "" { return errors.New("cannot record empty PikPak remote task ID") }
+ result, err := s.db.ExecContext(ctx, "UPDATE tasks SET pikpak_task_id = ?, pikpak_root_file_id = CASE WHEN ? <> '' THEN ? ELSE pikpak_root_file_id END, cancel_pending_submission = 0, updated_at = ? WHERE id = ? AND pikpak_account_id = ? AND (pikpak_task_id = '' OR pikpak_task_id = ?)",
+ remoteID, rootID, rootID, time.Now().UTC().Format(time.RFC3339Nano), taskID, accountID, remoteID)
+ if err != nil { return err }
+ rows, err := result.RowsAffected()
+ if err != nil { return err }
+ if rows != 1 { return sql.ErrNoRows }
+ return nil
+}
+
+// A definitive rejection cannot create a remote download; transport errors
+// must leave pending submission unresolved to avoid falsely declaring success.
+func (s *SQLite) ResolveRejectedPikPakSubmission(ctx context.Context, taskID string) error {
+ _, err := s.db.ExecContext(ctx, "UPDATE tasks SET cancel_pending_submission = 0 WHERE id = ? AND status = ? AND pikpak_task_id = ''", taskID, string(domain.TaskCancelling))
+ return err
+}
+
+func (s *SQLite) ListCancelWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
+ if limit <= 0 || limit > 500 { limit = 100 }
+ rows, err := s.db.QueryContext(ctx, "SELECT "+taskColumns+" FROM tasks WHERE status = ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?) ORDER BY created_at ASC LIMIT ?",
+ string(domain.TaskCancelling), now.UTC().Format(time.RFC3339Nano), limit)
+ if err != nil { return nil, err }
+ defer rows.Close()
+ return scanTasks(rows)
 }
 
 func (s *SQLite) ListFinalizeWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error) {
@@ -724,6 +780,7 @@ func scan(row scanner) (domain.Task, error) {
 	var task domain.Task
 	var status, createdAt, updatedAt string
 	var nextAttemptAt, completedAt, pikpakLastActivityAt sql.NullString
+	var cancelPendingSubmission int
 	err := row.Scan(
 		&task.ID,
 		&task.Source,
@@ -748,11 +805,13 @@ func scan(row scanner) (domain.Task, error) {
 		&createdAt,
 		&updatedAt,
 		&completedAt,
+		&cancelPendingSubmission,
 	)
 	if err != nil {
 		return domain.Task{}, err
 	}
 	task.Status = domain.TaskStatus(status)
+	task.CancelPendingSubmission = cancelPendingSubmission != 0
 
 	task.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
 	if err != nil {

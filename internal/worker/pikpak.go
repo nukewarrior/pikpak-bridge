@@ -20,6 +20,9 @@ type pikpakStore interface {
 	PikPakActiveCounts(ctx context.Context) (map[string]int, error)
 	PikPakKnownTaskIDs(ctx context.Context) (map[string]map[string]struct{}, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
+	GetTask(ctx context.Context, id string) (domain.Task, error)
+	RecordPikPakSubmission(ctx context.Context, taskID, accountID, remoteID, rootID string) error
+	ResolveRejectedPikPakSubmission(ctx context.Context, taskID string) error
 	ReplaceRemoteFiles(ctx context.Context, taskID string, files []domain.RemoteFile) error
 }
 
@@ -34,6 +37,7 @@ type Options struct {
 	MinFreeSpace            int64
 	AccountFailureThreshold int
 	AccountCooldown         time.Duration
+	Locks                   *TaskLocks
 }
 
 type Worker struct {
@@ -41,6 +45,7 @@ type Worker struct {
 	provider pikpak.Provider
 	options  Options
 	accounts map[string]*accountRuntime
+	locks *TaskLocks
 }
 
 type accountRuntime struct {
@@ -80,11 +85,13 @@ func New(store pikpakStore, provider pikpak.Provider, options Options) *Worker {
 		options.AccountCooldown = 30 * time.Minute
 	}
 
+	if options.Locks == nil { options.Locks = NewTaskLocks() }
 	return &Worker{
 		store:    store,
 		provider: provider,
 		options:  options,
 		accounts: make(map[string]*accountRuntime, len(options.AccountIDs)),
+		locks: options.Locks,
 	}
 }
 
@@ -128,8 +135,12 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("PikPak 任务处理失败", "task_id", tasks[i].ID, "error", err)
+		unlock := w.locks.Lock(tasks[i].ID)
+		current, loadErr := w.store.GetTask(ctx, tasks[i].ID)
+		if loadErr == nil { loadErr = w.processTask(ctx, &current) }
+		unlock()
+		if loadErr != nil {
+			slog.Warn("PikPak 任务处理失败", "task_id", tasks[i].ID, "error", loadErr)
 		}
 	}
 	return nil
@@ -140,6 +151,11 @@ func (w *Worker) processTask(ctx context.Context, task *domain.Task) error {
 	case domain.TaskQueued, domain.TaskWaitingPikPakAccount:
 		return w.selectAndSubmit(ctx, task)
 	case domain.TaskPikPakSubmitting:
+		if task.PikPakTaskID != "" {
+			task.Status = domain.TaskPikPakRunning
+			task.NextAttemptAt = nil
+			return w.store.SaveTask(ctx, task, "pikpak.submit_recovered", task.PikPakTaskID)
+		}
 		return w.submit(ctx, task, false)
 	case domain.TaskPikPakRunning:
 		return w.poll(ctx, task)
@@ -349,6 +365,9 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 	remote, err := w.provider.SubmitOffline(ctx, task.PikPakAccountID, task.Source)
 	if err != nil {
 		w.noteSubmitError(task.PikPakAccountID, err)
+		if kind := pikpak.KindOf(err); kind == pikpak.ErrorKindQuota || kind == pikpak.ErrorKindStorage || kind == pikpak.ErrorKindAuth || kind == pikpak.ErrorKindCaptcha {
+			if clearErr := w.store.ResolveRejectedPikPakSubmission(ctx, task.ID); clearErr != nil { return clearErr }
+		}
 		slog.Warn("PikPak 离线下载提交失败",
 			"task_id", task.ID,
 			"account_id", task.PikPakAccountID,
@@ -377,6 +396,7 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 			errors.New("PikPak returned an empty offline task ID"))
 	}
 
+	if err := w.store.RecordPikPakSubmission(ctx, task.ID, task.PikPakAccountID, remote.ID, remote.RootFileID); err != nil { return fmt.Errorf("persist accepted PikPak submission: %w", err) }
 	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
 	slog.Info("PikPak 离线下载提交成功",
 		"task_id", task.ID,
