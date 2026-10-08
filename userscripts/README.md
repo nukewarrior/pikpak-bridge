@@ -21,6 +21,7 @@
 - 如果种子为纯 BT v2、下载失败、返回登录 HTML 或文件无法解析，会提示错误并停止，不会向 Bridge 提交错误磁链。支持直接传入带 40 位 BTIH 的现成磁链。
 - 发送前调用 `GET {Bridge地址}/api/v1/targets` 获取当前可用目标。如果只有一个目标则直接选中并发送；如果有多个，则显示名称、目录及默认标记供选择；取消选择不会提交任务。
 - `POST {Bridge地址}/api/v1/tasks`，请求体为 `{"url":"magnet:?...","target":"选中的目标 ID"}`。目标 ID 无需手工记录或保存在脚本设置中。
+- 种子快捷弹窗的 **✂ 剪刀按钮**使用与 Bridge 推送相同的 torrent 二进制解析和 BTIH 计算逻辑，复制真实磁链到剪贴板；失败时弹出错误，不会静默忽略。
 - HTTP **201** 显示“已提交”；HTTP **409** 携带 `existing_task_id` 时显示“已存在”，不会重复创建。
 - 其他状态、网络异常或无法提取 BTIH 时显示失败原因。
 - 第一版**不在 E-Hentai 页面显示 PikPak/aria2 桥接进度**；可在 pikpak-bridge Web UI 中查看任务。原脚本的 aria2 进度显示不变。
@@ -35,7 +36,7 @@
 ## 来源和授权
 
 - 原始作者：xioxin、SchneeHertz；原始项目：[EhTagTranslation/UserScripts](https://github.com/EhTagTranslation/UserScripts)
-- 上游版本：EhAria2 v1.2；本地修改版：v1.3.2
+- 上游版本：EhAria2 v1.2；本地修改版：v1.3.3
 - 衍生脚本保留原作者署名并依照 **GNU GPL v3** 分发，许可证全文见 [LICENSE](LICENSE)。此许可声明针对本目录派生的用户脚本，不改变 `pikpak-bridge` 其他独立代码的授权。
 - 后续可通过脚本头部的 `@updateURL` / `@downloadURL` 从本仓库同步更新。
 

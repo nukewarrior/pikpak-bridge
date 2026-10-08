@@ -12,6 +12,9 @@ const hexHash = '0123456789abcdef0123456789abcdef01234567';
 
 function createHarness(respond) {
     const requests = [];
+    const clipboard = [];
+    const alerts = [];
+    const delayedUpdates = [];
     const config = {
         ARIA2_RPC: '',
         BRIDGE_URL: 'https://bridge.example.test/base/'
@@ -35,18 +38,22 @@ function createHarness(respond) {
         GM_registerMenuCommand() {},
         GM_getValue() { return null; },
         GM_setValue() {},
+        GM_setClipboard(value, type) { clipboard.push({value, type}); },
         GM_xmlhttpRequest(req) {
             requests.push(req);
             respond(req);
         },
-        setTimeout(fn, wait) { return wait === 3000 ? 0 : setTimeout(fn, wait); },
+        setTimeout(fn, wait) {
+            if(wait === 2000) { delayedUpdates.push(fn); return 0; }
+            return wait === 3000 ? 0 : setTimeout(fn, wait);
+        },
         clearTimeout,
         console: {log() {}, warn() {}, error() {}},
-        alert() {}
+        alert(message) { alerts.push(message); }
     };
     vm.createContext(ctx);
     vm.runInContext(script, ctx, {filename: 'eharia2-pikpak-bridge.user.js'});
-    return {ctx, requests, config};
+    return {ctx, requests, config, clipboard, alerts, delayedUpdates};
 }
 
 function evaluate(ctx, expression) {
@@ -328,10 +335,79 @@ test('cancelling target dialog does not create Bridge task', async () => {
     assert.equal(doc.body.children.length,0);
 });
 
+test('scissors copies SHA-1 of real torrent info bytes and never submits to Bridge', async () => {
+    const sample = exampleTorrent();
+    const {ctx, requests, clipboard, delayedUpdates, alerts} = createHarness(req =>
+        req.onload({status:200,response:sample.arrayBuffer}));
+    const button={textContent:'✂',title:'复制磁链',dataset:{}};
+    ctx.copyButton=button;
+    await evaluate(ctx, "copyTorrentMagnetToClipboard('https://e-hentai.org/torrent/123/abcdef.torrent', copyButton)");
+    assert.equal(requests.length,1);
+    assert.equal(requests[0].responseType,'arraybuffer');
+    assert.equal(clipboard.length,1);
+    assert.equal(clipboard[0].type,'text');
+    assert.equal(clipboard[0].value,
+        'magnet:?xt=urn:btih:' + sample.hash + '&tr=' + encodeURIComponent(sample.announce));
+    assert.equal(button.textContent,'✔');
+    assert.equal(button.title,'磁链已复制到剪贴板');
+    assert.equal(alerts.length,0);
+    assert.equal(delayedUpdates.length,1);
+    delayedUpdates[0]();
+    assert.equal(button.textContent,'✂');
+    assert.equal(button.title,'复制磁链');
+});
+
+test('scissors may copy an already provided magnet without network access', async () => {
+    const {ctx,requests,clipboard}=createHarness(() => {});
+    const button={textContent:'✂',title:'复制磁链',dataset:{}};
+    ctx.copyButton=button;
+    await evaluate(ctx, "copyTorrentMagnetToClipboard('magnet:?xt=urn:btih:" + hexHash + "', copyButton)");
+    assert.equal(requests.length,0);
+    assert.equal(clipboard[0].value,'magnet:?xt=urn:btih:' + hexHash);
+});
+
+test('scissors shows an error and never copies invalid or inaccessible torrents', async () => {
+    const situations=[
+        [req=>req.onload({status:200,response:Uint8Array.from(Buffer.from('<html>login</html>')).buffer}),/种子文件|BitTorrent/],
+        [req=>req.onload({status:403,response:null}),/HTTP 403/],
+        [req=>req.ontimeout({}),/超时/]
+    ];
+    for(const [respond,pattern] of situations) {
+        const {ctx,clipboard,alerts,delayedUpdates}=createHarness(respond);
+        const button={textContent:'✂',title:'复制磁链',dataset:{}};
+        ctx.copyButton=button;
+        await evaluate(ctx, "copyTorrentMagnetToClipboard('https://e-hentai.org/torrent/123/abcdef.torrent', copyButton)");
+        assert.equal(clipboard.length,0);
+        assert.equal(alerts.length,1);
+        assert.match(alerts[0],pattern);
+        assert.equal(button.textContent,'✕');
+        assert.equal(button.dataset.copyBusy,'0');
+        delayedUpdates[0]();
+        assert.equal(button.textContent,'✂');
+    }
+});
+
+test('repeated scissors clicks while download is pending do not trigger multiple requests', async () => {
+    let pending;
+    const {ctx,requests,clipboard}=createHarness(req=>{pending=req;});
+    const button={textContent:'✂',title:'复制磁链',dataset:{}};
+    ctx.copyButton=button;
+    const first=evaluate(ctx, "copyTorrentMagnetToClipboard('https://e-hentai.org/torrent/123/abcdef.torrent', copyButton)");
+    const second=evaluate(ctx, "copyTorrentMagnetToClipboard('https://e-hentai.org/torrent/123/abcdef.torrent', copyButton)");
+    assert.equal(requests.length,1);
+    assert.equal(button.dataset.copyBusy,'1');
+    pending.onload({status:200,response:exampleTorrent().arrayBuffer});
+    await Promise.all([first,second]);
+    assert.equal(clipboard.length,1);
+});
+
 test('torrent page and popup preserve aria2 and add separate Bridge entries', () => {
     assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton\)/);
     assert.match(script, /const bridgeButton = event\.target\.closest/);
     assert.match(script, /ariaClient\.addUri\(getTorrentLink\(link\), gmc\.get\('ARIA2_DIR'\)\)/);
     assert.match(script, /class="aria2helper-one-click bt-bridge-button bt"/);
     assert.match(script, /@connect\s+\*/);
+    assert.match(script, /event\.target\.closest\('.bt-copy-button'\)/);
+    assert.match(script, /await copyTorrentMagnetToClipboard\(copyButton\.dataset\.link, copyButton\)/);
+    assert.doesNotMatch(script, /event\.target\.parentNode\.contains\("bt-copy-button"\)/);
 });
