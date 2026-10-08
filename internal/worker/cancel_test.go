@@ -183,6 +183,55 @@ func TestCancellationWithUnknownSubmissionNeverPretendsSuccess(t *testing.T) {
  if got.Status!=domain.TaskCancelled {t.Fatalf("known remote task not cleaned: %#v",got)}
 }
 
+func TestAria2CancellationOnlyIgnoresGenuineMissingGID(t *testing.T) {
+ if aria2NotFound(errors.New("aria2 rpc http status 404 Not Found")) {
+  t.Fatal("HTTP 404 does not mean aria2 GID is gone")
+ }
+ if !aria2NotFound(errors.New("aria2 rpc error 1: GID 1234 not found")) {
+  t.Fatal("missing GID should be treated as idempotent cleanup")
+ }
+}
+
+func TestCancellationRetriesRootDeletion(t *testing.T) {
+ db,err:=store.Open(t.TempDir()+"/root.db")
+ if err!=nil {t.Fatal(err)}
+ defer db.Close()
+ createCancellationTask(t,db,"root-retry")
+ task,err:=db.GetTask(context.Background(),"root-retry")
+ if err!=nil {t.Fatal(err)}
+ task.Status=domain.TaskPikPakRunning
+ task.PikPakAccountID="pp1"
+ task.PikPakTaskID="task-root"
+ task.PikPakRootFileID="root-1"
+ if err:=db.SaveTask(context.Background(),&task,"","");err!=nil {t.Fatal(err)}
+ if _,err:=db.RequestCancel(context.Background(),task.ID);err!=nil {t.Fatal(err)}
+ p:=&flakyRootDeleteProvider{fails:1}
+ c:=NewCanceller(db,p,&fakeAria2{},CancelOptions{RetryInterval:time.Millisecond})
+ if err:=c.RunOnce(context.Background());err!=nil {t.Fatal(err)}
+ waiting,err:=db.GetTask(context.Background(),task.ID)
+ if err!=nil {t.Fatal(err)}
+ if waiting.Status!=domain.TaskCancelling || waiting.RetryCount!=1 {
+  t.Fatalf("root deletion failure must remain pending: %#v",waiting)
+ }
+ time.Sleep(5*time.Millisecond)
+ if err:=c.RunOnce(context.Background());err!=nil {t.Fatal(err)}
+ done,err:=db.GetTask(context.Background(),task.ID)
+ if err!=nil {t.Fatal(err)}
+ if done.Status!=domain.TaskCancelled || p.calls!=2 { t.Fatalf("root deletion not retried: %#v, calls=%d",done,p.calls) }
+}
+
+type flakyRootDeleteProvider struct {
+ fakeProvider
+ fails int
+ calls int
+}
+
+func (p *flakyRootDeleteProvider) DeletePermanently(context.Context,string,string) error {
+ p.calls++
+ if p.fails>0 {p.fails--;return errors.New("temporary root deletion error")}
+ return nil
+}
+
 func TestCancellationRetriesAria2Failure(t *testing.T) {
  db,err:=store.Open(t.TempDir()+"/aria.db")
  if err!=nil {t.Fatal(err)}
