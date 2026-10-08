@@ -1039,7 +1039,7 @@ async function openTask(id) {
         cancelButton.disabled = true;
         try {
           const result = await request(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {method:"POST"});
-          toast("已提交取消请求，后台将持续重试远端清理直至完成。");
+          toast("已提交取消请求；无法确认的远端提交可能需要人工核对。");
           await Promise.all([loadTasks(), loadHistoryTasks()]);
           await openTask(id);
         } catch (err) {
