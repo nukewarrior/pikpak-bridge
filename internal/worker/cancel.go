@@ -129,7 +129,8 @@ func (w *Canceller) stopAria2(ctx context.Context, instanceID, gid string) error
 
 func aria2NotFound(err error) bool {
  msg := strings.ToLower(err.Error())
- return strings.Contains(msg, "not found") || strings.Contains(msg, "no such gid")
+ if strings.Contains(msg, "http status") { return false }
+ return strings.Contains(msg, "no such gid") || (strings.Contains(msg, "not found") && (strings.Contains(msg, "gid") || strings.Contains(msg, "download")))
 }
 
 func (w *Canceller) retry(ctx context.Context, task *domain.Task, cause error) error {
