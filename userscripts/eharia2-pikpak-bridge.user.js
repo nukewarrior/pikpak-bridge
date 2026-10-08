@@ -1221,6 +1221,7 @@ function getTorrentLink(link) {
 function init() {
     ariaClient = new AriaClientLite({rpc: gmc.get('ARIA2_RPC'), secret: gmc.get('ARIA2_SECRET'), id: ARIA2_CLIENT_ID});
     Tool.addStyle(STYLE);
+    Tool.addStyle(ONE_CLICK_STYLE);
 
     const monitorTask = new MonitorTask();
     if(GID) {
@@ -1307,7 +1308,6 @@ function init() {
     monitorTask.start();
 
     if(gmc.get('USE_ONE_CLICK_DOWNLOAD') && gmc.get('ARIA2_RPC')) {
-        Tool.addStyle(ONE_CLICK_STYLE);
         const trList = document.querySelectorAll(".itg tr, .itg .gl1t");
         if(trList && trList.length) {
             trList.forEach(tr => {
