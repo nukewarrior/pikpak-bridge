@@ -1388,7 +1388,7 @@ test('Bridge progress stops polling after terminal result and displays server er
     await evaluate(ctx,'bridgeProgressMonitor.poll()');
     assert.equal(view.dataset.state,'failed');
     assert.match(view.title,/磁盘空间不足/);
-    assert.equal(view.children[0].textContent,'PikPak · Aria2 失败');
+    assert.match(view.children[0].textContent,/PikPak · Aria2 失败.*磁盘空间不足/);
     assert.equal(view.children[1].style.display,'none');
     assert.equal(requests.length,1);
 });
