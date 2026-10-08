@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const {createHash, webcrypto} = require('node:crypto');
 
 const script = fs.readFileSync(path.join(__dirname, 'eharia2-pikpak-bridge.user.js'), 'utf8');
 const hexHash = '0123456789abcdef0123456789abcdef01234567';
@@ -24,6 +25,8 @@ function createHarness(respond) {
     }
     const ctx = {
         URL,
+        TextDecoder,
+        crypto: webcrypto,
         window: {location: {
             host: 'e-hentai.org', href: 'https://e-hentai.org/g/123/abc/',
             pathname: '/g/123/abc/'
@@ -50,12 +53,74 @@ function evaluate(ctx, expression) {
     return vm.runInContext(expression, ctx);
 }
 
-test('upstream torrent URL converts to 40-character BTIH magnet', () => {
-    const {ctx} = createHarness(() => {});
-    const magnet = evaluate(ctx, "bridgeMagnetFromTorrentLink('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent')");
-    assert.match(magnet, /^magnet:\?xt=urn:btih:/);
-    assert.match(magnet, /tr=http%3A%2F%2Fehtracker\.org%2F123%2Fannounce$/);
-    assert.throws(() => evaluate(ctx, "bridgeMagnetFromTorrentLink('https://example.org/file.torrent')"), /BTIH/);
+function exampleTorrent() {
+    // Byte-exact BitTorrent v1 metadata, separate from any URL identifier.
+    const announce = 'https://ehtracker.org/123/announce';
+    const info = Buffer.from('d6:lengthi1e4:name4:test12:piece lengthi16384e6:pieces20:abcdefghijklmnopqrste');
+    const torrent = Buffer.concat([
+        Buffer.from('d8:announce' + Buffer.byteLength(announce) + ':' + announce + '4:info'),
+        info,
+        Buffer.from('e')
+    ]);
+    return {
+        arrayBuffer: Uint8Array.from(torrent).buffer,
+        hash: createHash('sha1').update(info).digest('hex').toUpperCase(),
+        announce
+    };
+}
+
+function respondWithTorrent(req, other) {
+    if(req.responseType === 'arraybuffer') {
+        req.onload({status: 200, response: exampleTorrent().arrayBuffer});
+    } else {
+        other(req);
+    }
+}
+
+test('torrent URL is fetched; BTIH is computed from exact info bytes rather than URL', async () => {
+    const sample = exampleTorrent();
+    const {ctx, requests} = createHarness(req => req.onload({status: 200, response: sample.arrayBuffer}));
+    const magnet = await evaluate(ctx, "bridgeMagnetFromTorrentLink('https://exhentai.org/torrent/123/" + hexHash + ".torrent')");
+    assert.equal(magnet, 'magnet:?xt=urn:btih:' + sample.hash + '&tr=' + encodeURIComponent(sample.announce));
+    assert.notEqual(sample.hash, hexHash.toUpperCase());
+    assert.equal(requests[0].responseType, 'arraybuffer');
+    assert.equal(requests[0].url, 'https://exhentai.org/torrent/123/' + hexHash + '.torrent');
+});
+
+test('short and legacy torrent URLs use their actual file contents', async () => {
+    const {ctx} = createHarness(req => req.onload({status: 200, response: exampleTorrent().arrayBuffer}));
+    const magnet = await evaluate(ctx, "bridgeMagnetFromTorrentLink('https://e-hentai.org/torrent/123/abcd.torrent')");
+    assert.match(magnet, new RegExp(exampleTorrent().hash));
+    const second = await evaluate(ctx, "bridgeMagnetFromTorrentLink('https://ehtracker.org/get/123/" + hexHash + ".torrent')");
+    assert.equal(second, magnet);
+});
+
+test('bad bencode and v2-only torrent cannot create a misleading BTIH', async () => {
+    const html = createHarness(req => req.onload({status: 200, response: Uint8Array.from(Buffer.from('<html>Login</html>')).buffer}));
+    await assert.rejects(evaluate(html.ctx, "bridgeMagnetFromTorrentLink('https://e-hentai.org/torrent/123/abcd.torrent')"), /BitTorrent|种子/);
+    const v2 = Buffer.from('d4:infod4:name4:test12:meta versioni2eee');
+    const v2Ctx = createHarness(req => req.onload({status: 200, response: Uint8Array.from(v2).buffer}));
+    await assert.rejects(evaluate(v2Ctx.ctx, "bridgeMagnetFromTorrentLink('https://e-hentai.org/torrent/123/abcd.torrent')"), /BT v1/);
+});
+
+test('direct magnet works without fetching; untrusted torrent hosts fail closed', async () => {
+    const {ctx, requests} = createHarness(() => {});
+    const magnet = 'magnet:?xt=urn:btih:' + hexHash;
+    assert.equal(await evaluate(ctx, 'bridgeMagnetFromTorrentLink(' + JSON.stringify(magnet) + ')'), magnet);
+    await assert.rejects(evaluate(ctx, "bridgeMagnetFromTorrentLink('https://evil.example/get/123/abc.torrent')"), /不允许/);
+    await assert.rejects(evaluate(ctx, "bridgeMagnetFromTorrentLink('magnet:?xt=urn:btih:WRONG')"), /BTIH/);
+    assert.equal(requests.length, 0);
+});
+
+test('torrent download HTTP errors and network failures are reported', async () => {
+    for(const [handler, error] of [
+        [req=>req.onload({status: 403, response:null}),/HTTP 403/],
+        [req=>req.onerror({}),/权限/],
+        [req=>req.ontimeout({}),/超时/]
+    ]) {
+        const {ctx} = createHarness(handler);
+        await assert.rejects(evaluate(ctx, "bridgeMagnetFromTorrentLink('https://ehtracker.org/get/123/abc.torrent')"),error);
+    }
 });
 
 test('bridge URL rejects unsafe schemes, credentials and query parameters', () => {
@@ -117,6 +182,14 @@ test('server error, malformed JSON, network error and timeout reject', async () 
     }
 });
 
+
+async function waitForDialog(doc) {
+    for(let i=0;i<100;i++) {
+        if(doc.body.children.length) return;
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    throw new Error('Target selection dialog did not appear');
+}
 
 function fakeDocument() {
     const listeners = new Map();
@@ -186,40 +259,41 @@ test('unconfigured Bridge, invalid response and unreachable Bridge show actionab
 });
 
 test('one available target submits automatically without asking or config target', async () => {
-    const {ctx, requests} = createHarness(req => {
-        if(req.method === 'GET') {
-            req.onload({status:200,responseText:JSON.stringify({targets:[{id:'movies',name:'电影'}]})});
+    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+        if(request.method === 'GET') {
+            request.onload({status:200,responseText:JSON.stringify({targets:[{id:'movies',name:'电影'}]})});
         } else {
-            req.onload({status:201,responseText:'{"id":"task-123","status":"QUEUED"}'});
+            request.onload({status:201,responseText:'{"id":"task-123","status":"QUEUED"}'});
         }
-    });
+    }));
     const button = {tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton = button;
     await evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    assert.equal(requests.length,2);
-    assert.equal(requests[0].method,'GET');
-    assert.equal(requests[1].method,'POST');
-    assert.equal(JSON.parse(requests[1].data).target,'movies');
+    assert.equal(requests.length,3);
+    assert.equal(requests[0].responseType,'arraybuffer');
+    assert.equal(requests[1].method,'GET');
+    assert.equal(requests[2].method,'POST');
+    assert.equal(JSON.parse(requests[2].data).target,'movies');
     assert.equal(button.value,'已提交');
     assert.equal(button.disabled,false);
 });
 
 test('multiple targets present a dialog with server-provided names; selected ID is submitted', async () => {
-    const {ctx, requests} = createHarness(req => {
-        if(req.method === 'GET') {
-            req.onload({status:200,responseText:JSON.stringify({targets:[
+    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+        if(request.method === 'GET') {
+            request.onload({status:200,responseText:JSON.stringify({targets:[
                 {id:'movies',name:'电影',dir:'/downloads/movies',default:true},
                 {id:'tv',name:'电视剧',dir:'/downloads/tv'}
             ]})});
         } else {
-            req.onload({status:201,responseText:'{"id":"task-choose"}'});
+            request.onload({status:201,responseText:'{"id":"task-choose"}'});
         }
-    });
+    }));
     const doc = fakeDocument(); ctx.document=doc;
     const button = {tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton=button;
     const sending = evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    await Promise.resolve(); await Promise.resolve();
+    await waitForDialog(doc);
     assert.equal(doc.body.children.length,1);
     const dialog=doc.body.children[0].children[0];
     assert.equal(dialog['role'],'dialog');
@@ -230,24 +304,25 @@ test('multiple targets present a dialog with server-provided names; selected ID 
     dialog.children[3].children[1].onclick();
     await sending;
     assert.equal(requests.filter(x=>x.method==='POST').length,1);
-    assert.equal(JSON.parse(requests[1].data).target,'tv');
+    assert.equal(JSON.parse(requests[2].data).target,'tv');
     assert.equal(doc.body.children.length,0);
     assert.equal(doc.listeners.size,0);
 });
 
 test('cancelling target dialog does not create Bridge task', async () => {
-    const {ctx, requests} = createHarness(req => req.onload({
+    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => request.onload({
         status:200,responseText:JSON.stringify({targets:[{id:'a'},{id:'b'}]})
-    }));
+    })));
     const doc=fakeDocument();ctx.document=doc;
     const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton=button;
     const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    await Promise.resolve(); await Promise.resolve();
+    await waitForDialog(doc);
     const cancel=doc.body.children[0].children[0].children[3].children[0];
     cancel.onclick();
     await sending;
-    assert.equal(requests.length,1);
+    assert.equal(requests.length,2);
+    assert.equal(requests.filter(x=>x.method==='POST').length,0);
     assert.equal(button.value,'发送到 PikPak');
     assert.equal(button.disabled,false);
     assert.equal(doc.body.children.length,0);
