@@ -9,7 +9,7 @@
 3. **禁用已安装的原版 EhAria2**，避免两个脚本同时运行导致界面重复。该修改版使用独立的脚本名称和命名空间；原版配置通常需要在此版本中重新填写。
 4. 在脚本管理器菜单中打开“设置”，填写：
    - **Bridge 地址**：例如 `http://192.168.1.10:8080`；不要附加 `/api/v1/tasks`。
-   - **下载目标 ID**：填写 pikpak-bridge 中配置的 target ID（如 `movies`）；**留空**则由后端选择默认目标。
+   - **无需填写下载目标 ID**。每次点击发送时，脚本通过 `GET /api/v1/targets` 实时读取 Bridge 中已启用的下载目标；只有一个目标就直接提交，多个目标会弹出选择框。
    - **Aria2 RPC/密钥/保存路径**：需要保留直接 aria2 下载时填写；只使用 PikPak Bridge 时 RPC 可以留空。
 5. 在 Gallery 种子下载页点击“发送到 PikPak”；或在种子快捷弹窗点击青色的 **P** 按钮。原来的 aria2 和复制磁链按钮仍然保留。
 
@@ -18,7 +18,8 @@
 ## 工作方式
 
 - 从原脚本能识别的种子 URL 提取 40 位 BTIH Hash，构造 `magnet:?` 磁链。
-- `POST {Bridge地址}/api/v1/tasks`，请求体为 `{"url":"magnet:?...","target":"movies"}`；省略 `target` 则使用默认下载目标。
+- 发送前调用 `GET {Bridge地址}/api/v1/targets` 获取当前可用目标。如果只有一个目标则直接选中并发送；如果有多个，则显示名称、目录及默认标记供选择；取消选择不会提交任务。
+- `POST {Bridge地址}/api/v1/tasks`，请求体为 `{"url":"magnet:?...","target":"选中的目标 ID"}`。目标 ID 无需手工记录或保存在脚本设置中。
 - HTTP **201** 显示“已提交”；HTTP **409** 携带 `existing_task_id` 时显示“已存在”，不会重复创建。
 - 其他状态、网络异常或无法提取 BTIH 时显示失败原因。
 - 第一版**不在 E-Hentai 页面显示 PikPak/aria2 桥接进度**；可在 pikpak-bridge Web UI 中查看任务。原脚本的 aria2 进度显示不变。
@@ -33,7 +34,7 @@
 ## 来源和授权
 
 - 原始作者：xioxin、SchneeHertz；原始项目：[EhTagTranslation/UserScripts](https://github.com/EhTagTranslation/UserScripts)
-- 上游版本：EhAria2 v1.2；本地修改版：v1.3.0
+- 上游版本：EhAria2 v1.2；本地修改版：v1.3.1
 - 衍生脚本保留原作者署名并依照 **GNU GPL v3** 分发，许可证全文见 [LICENSE](LICENSE)。此许可声明针对本目录派生的用户脚本，不改变 `pikpak-bridge` 其他独立代码的授权。
 - 后续可通过脚本头部的 `@updateURL` / `@downloadURL` 从本仓库同步更新。
 
