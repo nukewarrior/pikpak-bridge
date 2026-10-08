@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.4
+// @version      1.3.5
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -38,7 +38,7 @@ const gmc = new GM_config({
     'title': 'AriaEh设置',
     'fields': {
         'ARIA2_RPC': {
-            'section': [ 'ARIA2配置', '如果你的下载服务器不是本机,需要的将域名添加到: <br>设置 - XHR 安全 - 用户域名白名单'],
+            'section': [ 'ARIA2配置', '使用 Aria2 下载时再选择保存目录，并自动记住最近使用的位置。如果下载服务器不是本机，请在设置 - XHR 安全 - 用户域名白名单中允许服务器地址。'],
             'label': 'ARIA2_RPC地址（可选）',
             'title': 'ARIA2_RPC地址, 例如: http://127.0.0.1:6800/jsonrpc',
             'labelPos': 'left',
@@ -48,12 +48,6 @@ const gmc = new GM_config({
         'ARIA2_SECRET': {
             'label': 'ARIA2_RPC密钥',
             'title': 'ARIA2_RPC密钥',
-            'type': 'text',
-            'default': ''
-        },
-        'ARIA2_DIR': {
-            'label': '保存文件位置',
-            'title': '例如 /Downloads 或者 D:\\Downloads, 留空将下载到默认位置',
             'type': 'text',
             'default': ''
         },
@@ -534,7 +528,8 @@ const BRIDGE_TARGET_STYLE = `
     margin: 0 0 12px;
     color: #555;
 }
-.aria2helper-bridge-dialog select {
+.aria2helper-bridge-dialog select,
+.aria2helper-bridge-dialog input[type="text"] {
     display: block;
     box-sizing: border-box;
     width: 100%;
@@ -545,6 +540,17 @@ const BRIDGE_TARGET_STYLE = `
     border: 1px solid #aaa;
     border-radius: 5px;
     font-size: 14px;
+}
+.aria2helper-aria2-dir-dialog label {
+    display: block;
+    font-weight: 600;
+    margin: 12px 0 5px;
+}
+.aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-error {
+    min-height: 18px;
+    color: #bf3030;
+    font-size: 12px;
+    margin-top: 5px;
 }
 .aria2helper-bridge-actions {
     display: flex;
@@ -828,6 +834,137 @@ function preferredBridgeTarget(targets, baseURL) {
         targets[0];
 }
 
+// Each aria2 RPC endpoint keeps its own bounded, recent-first directory history.
+// The history is stored by the userscript manager, not by Bridge or the web page.
+function aria2DirectoryHistoryKey(rpc) {
+    return 'ARIA2_DIR_HISTORY:' + String(rpc || '').trim();
+}
+
+function aria2DirectoryHistory(rpc) {
+    const saved = GM_getValue(aria2DirectoryHistoryKey(rpc), []);
+    if(!Array.isArray(saved)) return [];
+    return [...new Set(saved.filter(dir => typeof dir === 'string')
+        .map(dir => dir.trim()).filter(Boolean))].slice(0, 10);
+}
+
+function rememberAria2Directory(rpc, directory) {
+    const dir = String(directory || '').trim();
+    if(!dir) return;
+    const recent = aria2DirectoryHistory(rpc).filter(entry => entry !== dir);
+    GM_setValue(aria2DirectoryHistoryKey(rpc), [dir, ...recent].slice(0, 10));
+}
+
+// Only call this once the aria2 RPC confirms a task was accepted.
+async function submitToAria2(uri, directory) {
+    const id = await ariaClient.addUri(uri, directory);
+    if(!id) throw new Error('aria2 未返回任务 ID，未保存此次目录');
+    rememberAria2Directory(ariaClient.rpc, directory);
+    return id;
+}
+
+function chooseAria2Directory(rpc) {
+    const recent = aria2DirectoryHistory(rpc);
+    return new Promise(resolve => {
+        const previousFocus = document.activeElement;
+        const overlay = document.createElement('div');
+        overlay.className = 'aria2helper-bridge-overlay';
+        const dialog = document.createElement('div');
+        dialog.className = 'aria2helper-bridge-dialog aria2helper-aria2-dir-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', '选择 aria2 保存位置');
+        const title = document.createElement('h3');
+        title.textContent = '选择 aria2 保存位置';
+        const description = document.createElement('p');
+        description.textContent = '请输入 aria2 服务器上的保存目录：';
+        const label = document.createElement('label');
+        label.textContent = '保存目录';
+        const directory = document.createElement('input');
+        directory.type = 'text';
+        directory.setAttribute('aria-label', 'aria2 保存目录');
+        directory.setAttribute('placeholder', '例如 /downloads');
+        directory.value = recent[0] || '';
+        label.appendChild(directory);
+        dialog.appendChild(title);
+        dialog.appendChild(description);
+        dialog.appendChild(label);
+
+        if(recent.length) {
+            const historyLabel = document.createElement('label');
+            historyLabel.textContent = '最近使用';
+            const select = document.createElement('select');
+            select.setAttribute('aria-label', '最近使用的 aria2 保存目录');
+            for(const path of recent) {
+                const option = document.createElement('option');
+                option.value = path;
+                option.textContent = path;
+                select.appendChild(option);
+            }
+            select.value = recent[0];
+            select.onchange = () => {
+                directory.value = select.value;
+                error.textContent = '';
+            };
+            historyLabel.appendChild(select);
+            dialog.appendChild(historyLabel);
+        }
+        const error = document.createElement('div');
+        error.className = 'aria2helper-aria2-dir-error';
+        error.setAttribute('role', 'status');
+        dialog.appendChild(error);
+        const actions = document.createElement('div');
+        actions.className = 'aria2helper-bridge-actions';
+        const cancel = document.createElement('button');
+        cancel.type = 'button';
+        cancel.textContent = '取消';
+        const confirm = document.createElement('button');
+        confirm.type = 'button';
+        confirm.className = 'aria2helper-bridge-confirm';
+        confirm.textContent = '发送到 aria2';
+
+        let closed = false;
+        const finish = value => {
+            if(closed) return;
+            closed = true;
+            document.removeEventListener('keydown', onKeydown, true);
+            overlay.remove();
+            if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+            resolve(value);
+        };
+        const submit = () => {
+            const dir = directory.value.trim();
+            if(!dir) {
+                error.textContent = '请填写保存目录';
+                directory.focus();
+                return;
+            }
+            finish(dir);
+        };
+        const onKeydown = event => {
+            if(event.key === 'Escape') {
+                event.preventDefault();
+                finish(null);
+            } else if(event.key === 'Enter' && (event.target === directory || event.target === confirm)) {
+                event.preventDefault();
+                submit();
+            }
+        };
+        cancel.onclick = () => finish(null);
+        confirm.onclick = submit;
+        directory.oninput = () => { error.textContent = ''; };
+        overlay.onclick = event => {
+            if(event.target === overlay) finish(null);
+        };
+        actions.appendChild(cancel);
+        actions.appendChild(confirm);
+        dialog.appendChild(actions);
+        overlay.appendChild(dialog);
+        document.addEventListener('keydown', onKeydown, true);
+        document.body.appendChild(overlay);
+        directory.focus();
+    });
+}
+
 function chooseBridgeTarget(targets, baseURL) {
     if(targets.length === 1) return Promise.resolve(targets[0]);
 
@@ -1010,20 +1147,26 @@ class SendTaskButton {
     }
 
     async buttonClick() {
+        if(this.aria2Busy) return;
         if(!gmc.get('ARIA2_RPC')) {
             this.showMessage('请先配置 Aria2 RPC');
             return;
         }
-        this.showLoading();
+        this.aria2Busy = true;
         try {
-            const id = await ariaClient.addUri(getTorrentLink(this.link), gmc.get('ARIA2_DIR'));
+            const dir = await chooseAria2Directory(ariaClient.rpc);
+            if(dir === null) return;
+            this.showLoading();
+            const id = await submitToAria2(getTorrentLink(this.link), dir);
             Tool.setTaskId(this.gid, id);
             this.showMessage("成功");
         } catch (error) {
             console.error(error);
-            if(typeof error === 'string') return this.showMessage(error || "请求失败");
-            if(error.status) return this.showMessage("请求失败 HTTP" + error.status);
-            this.showMessage(error.message || "请求失败");
+            if(typeof error === 'string') this.showMessage(error || "请求失败");
+            else if(error.status) this.showMessage("请求失败 HTTP" + error.status);
+            else this.showMessage(error.message || "请求失败");
+        } finally {
+            this.aria2Busy = false;
         }
     }
 }
@@ -1288,9 +1431,11 @@ function oneClickButton(gid, pageLink, archiverLink) {
     let loading = false;
     oneClick.onclick = async () => {
         if(loading === true) return;
-        oneClick.innerHTML = SVG_LOADING_ICON;
         loading = true;
         try {
+            const dir = await chooseAria2Directory(ariaClient.rpc);
+            if(dir === null) return;
+            oneClick.innerHTML = SVG_LOADING_ICON;
             if (pageLink && !archiverLink) {
                 const g = await fetch(pageLink, { credentials: "include" }).then(v => v.text());
                 const archiverLinkMatch = /'(https:\/\/e.hentai\.org\/archiver\.php?.*?)'/i.exec(g);
@@ -1305,17 +1450,18 @@ function oneClickButton(gid, pageLink, archiverLink) {
             ).then(v => v.text());
             const downloadLinkMatch = /"(http.*?\.hath.network\/archive.*?)"/i.exec(archiverHtml);
             const downloadLink = downloadLinkMatch[1] + '?start=1';
-            const taskId = await ariaClient.addUri(downloadLink, gmc.get('ARIA2_DIR'));
+            const taskId = await submitToAria2(downloadLink, dir);
             Tool.setTaskId(gid, taskId);
             oneClick.innerHTML = "✔";
             setTimeout(() => {
                 oneClick.innerHTML = "🡇";
             }, 2000);
         } catch (error) {
-            alert("一键下载失败:" + error.message);
+            alert("一键下载失败:" + (error.message || String(error)));
             oneClick.innerHTML = "🡇";
+        } finally {
+            loading = false;
         }
-        loading = false;
     }
     return oneClick;
 }
@@ -1506,24 +1652,30 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                                 await sendTorrentToBridge(bridgeButton.dataset.link, bridgeButton);
                                 return;
                             }
-                            if(event.target.classList.contains("bt-download-button")) {
-                                const link = event.target.dataset.link;
-                                const gid = parseInt(event.target.dataset.gid, 10);
-                                if(event.target.dataset.loading === true) return;
-                                event.target.innerHTML = SVG_LOADING_ICON;
-                                event.target.dataset.loading = true;
+                            const ariaButton = event.target.closest && event.target.closest('.bt-download-button');
+                            if(ariaButton && btListBox.contains(ariaButton)) {
+                                event.preventDefault();
+                                if(ariaButton.dataset.loading === '1') return;
+                                ariaButton.dataset.loading = '1';
                                 try {
-                                    const taskId = await ariaClient.addUri(getTorrentLink(link), gmc.get('ARIA2_DIR'));
-                                    Tool.setTaskId(gid, taskId);
-                                    event.target.innerHTML = "✔";
+                                    const dir = await chooseAria2Directory(ariaClient.rpc);
+                                    if(dir === null) return;
+                                    ariaButton.innerHTML = SVG_LOADING_ICON;
+                                    const link = ariaButton.dataset.link;
+                                    const torrentGid = parseInt(ariaButton.dataset.gid, 10);
+                                    const taskId = await submitToAria2(getTorrentLink(link), dir);
+                                    Tool.setTaskId(torrentGid, taskId);
+                                    ariaButton.innerHTML = "✔";
                                     setTimeout(() => {
-                                        event.target.innerHTML = "🡇";
+                                        if(ariaButton.dataset.loading !== '1') ariaButton.innerHTML = "🡇";
                                     }, 2000);
                                 } catch (error) {
-                                    alert("一键下载失败:" + error.message);
-                                    event.target.innerHTML = "🡇";
+                                    alert("一键下载失败:" + (error.message || String(error)));
+                                    ariaButton.innerHTML = "🡇";
+                                } finally {
+                                    ariaButton.dataset.loading = '0';
                                 }
-                                event.target.dataset.loading = false;
+                                return;
                             }
                             const copyButton = event.target.closest && event.target.closest('.bt-copy-button');
                             if(copyButton && btListBox.contains(copyButton)) {
