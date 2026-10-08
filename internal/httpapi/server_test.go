@@ -485,7 +485,7 @@ func TestRetryRejectsNonFailedTask(t *testing.T) {
 }
 
 
-func TestCancelActiveTaskCleansResourcesAndIsTerminal(t *testing.T) {
+func TestCancelActiveTaskQueuesDurableCleanup(t *testing.T) {
 	db := openTestStore(t)
 	runtime := &fakeRuntime{}
 	server := New(db, WithRuntime(runtime))
@@ -539,35 +539,29 @@ func TestCancelActiveTaskCleansResourcesAndIsTerminal(t *testing.T) {
 	stale := task
 	res := httptest.NewRecorder()
 	server.Handler().ServeHTTP(res, httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/cancel", nil))
-	if res.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", res.Code, res.Body.String())
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d: %s", res.Code, res.Body.String())
 	}
 	got, err := db.GetTask(context.Background(), task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != domain.TaskCancelled || got.CompletedAt == nil {
-		t.Fatalf("task was not cancelled terminally: %#v", got)
+	if got.Status != domain.TaskCancelling || got.CompletedAt != nil {
+		t.Fatalf("task was not queued for cleanup: %#v", got)
 	}
-	if len(runtime.cancelledPikPak) != 1 || runtime.cancelledPikPak[0] != "pp01:remote-task" {
-		t.Fatalf("PikPak task not cancelled: %#v", runtime.cancelledPikPak)
-	}
-	if len(runtime.deletedPikPak) != 1 || runtime.deletedPikPak[0] != "pp01:root-file" {
-		t.Fatalf("PikPak root not deleted: %#v", runtime.deletedPikPak)
-	}
-	if len(runtime.cancelledAria2) != 1 || runtime.cancelledAria2[0] != "nas:0123456789abcdef" {
-		t.Fatalf("aria2 task not cancelled: %#v", runtime.cancelledAria2)
+	if len(runtime.cancelledPikPak) != 0 || len(runtime.deletedPikPak) != 0 || len(runtime.cancelledAria2) != 0 {
+		t.Fatal("HTTP request must not perform non-durable remote cleanup")
 	}
 
 	stale.Status = domain.TaskPikPakRunning
 	if err := db.SaveTask(context.Background(), &stale, "", ""); err == nil {
-		t.Fatal("stale worker update revived a cancelled task")
+		t.Fatal("stale worker update revived a cancelling task")
 	}
 	got, err = db.GetTask(context.Background(), task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != domain.TaskCancelled {
-		t.Fatalf("cancelled task was revived: %s", got.Status)
+	if got.Status != domain.TaskCancelling {
+		t.Fatalf("cancelling task was revived: %s", got.Status)
 	}
 }
