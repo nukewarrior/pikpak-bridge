@@ -343,6 +343,49 @@ const STYLE = `
     border-color: #0d5e58 !important;
     color: #fff !important;
 }
+
+/* Bridge status is independent of the existing direct-aria2 status widgets. */
+.aria2helper-bridge-progress {
+    display: none;
+    box-sizing: border-box;
+    min-width: 0;
+    margin: 5px 4px;
+    padding: 6px 8px;
+    background: rgba(120, 150, 150, 0.12);
+    border: 1px solid rgba(120, 150, 150, 0.35);
+    border-radius: 6px;
+    color: inherit;
+    font: 11px/1.45 system-ui, sans-serif;
+    overflow-wrap: anywhere;
+}
+.aria2helper-bridge-progress-label { display: block; text-align: left; }
+.aria2helper-bridge-progress-track {
+    display: none;
+    height: 4px;
+    margin-top: 5px;
+    background: rgba(128, 128, 128, 0.3);
+    border-radius: 5px;
+    overflow: hidden;
+}
+.aria2helper-bridge-progress-fill {
+    display: block;
+    width: 0;
+    height: 100%;
+    background: #168f83;
+    border-radius: inherit;
+}
+.aria2helper-bridge-progress[data-state="failed"] { border-color: #bf625e; }
+.aria2helper-bridge-progress[data-state="completed"] .aria2helper-bridge-progress-fill { background: #548f30; }
+#torrentinfo .aria2helper-bridge-progress { width: 232px; margin: 7px auto 3px; }
+#btList .bt-actions-cell .aria2helper-bridge-progress {
+    max-width: 160px;
+    margin: 5px 0 0;
+    padding: 3px 5px;
+    white-space: normal;
+    text-align: left;
+}
+.gl3e .aria2helper-bridge-progress { width: 112px; margin: 4px; }
+.glname .aria2helper-bridge-progress { margin: 4px 0; }
 `;
 
 
@@ -1593,6 +1636,7 @@ async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
         if(!task.duplicate) {
             GM_setValue(bridgeLastTargetStorageKey(client.baseURL), selected.id);
         }
+        bridgeProgressMonitor.remember(torrentLink, task.id, button.dataset.gid || GID, fileInfo);
         setBridgeButtonText(button, task.duplicate ? '已存在' : '已提交');
         button.title = (task.duplicate ? 'Bridge 中已有该任务' : 'Bridge 任务已创建') +
             '：' + task.id + (task.target ? '（目标：' + task.target + '）' : '');
@@ -1633,6 +1677,7 @@ class SendTaskButton {
         this.bridgeButton.value = '发送到 PikPak';
         this.bridgeButton.className = 'stdbtn aria2helper-bridge-button';
         this.bridgeButton.title = '将此种子的磁链交给 pikpak-bridge 处理';
+        this.bridgeButton.dataset.gid = String(gid);
         this.bridgeButton.onclick = () => sendTorrentToBridge(this.link, this.bridgeButton, this.fileInfo);
         this.element.appendChild(this.bridgeButton);
         this.element.appendChild(this.loading);
@@ -2364,6 +2409,11 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                             torents.map(item => torrentListRow(item, gid, buttonLeft, twoLines, achievement)).join('')
                         }</table>`;
 
+                        const cells = btListBox.querySelectorAll('td.bt-actions-cell');
+                        torents.forEach((item, index) => {
+                            if(cells[index]) cells[index].appendChild(bridgeProgressMonitor.watchTorrent(item.link));
+                        });
+
                         btListBox.onclick = async (event) => {
                             const bridgeButton = event.target.closest && event.target.closest('.bt-bridge-button');
                             if(bridgeButton && btListBox.contains(bridgeButton)) {
@@ -2523,6 +2573,10 @@ function init() {
                     const button = new SendTaskButton(GID, link, torrentPageFileInfo(table));
                     insertionPoint.parentNode.insertBefore(button.element, insertionPoint);
                     arrangeTorrentPageActions(insertionPoint, button);
+                    const actions = button.element.parentNode;
+                    const statusHost = actions?.classList?.contains('aria2helper-torrent-actions-grid') ?
+                        actions.parentNode : actions;
+                    if(statusHost) statusHost.appendChild(bridgeProgressMonitor.watchTorrent(link));
                 });
             }
         }
@@ -2551,10 +2605,14 @@ function init() {
             const insertionPoint = document.querySelector('#torrentinfo p');
             if(insertionPoint) insertionPoint.parentElement.insertBefore(taskStatusUi.element, insertionPoint.nextElementSibling);
         }
+        if(IS_GALLERY_DETAIL_PAGE) {
+            const insertionPoint = document.querySelector('#gd2');
+            if(insertionPoint) insertionPoint.appendChild(bridgeProgressMonitor.watchGallery(GID));
+        }
         if(IS_GALLERY_DETAIL_PAGE && gmc.get('USE_TORRENT_POP_LIST')) {
             torrentsPopDetail();
         }
-    } else if(gmc.get('USE_LIST_TASK_STATUS')) {
+    } else if(gmc.get('USE_LIST_TASK_STATUS') || gmc.get('BRIDGE_URL')) {
         const trList = document.querySelectorAll(".itg tr, .itg .gl1t");
         if(trList && trList.length) {
             const insertionPointMap = {};
@@ -2571,9 +2629,12 @@ function init() {
                 const gid = Tool.urlGetGId(a.href);
                 const token = Tool.urlGetToken(a.href);
                 insertionPointMap[gid] = glname;
-                const statusUI = monitorTask.addGid(gid);
-                statusUI.element.style.textAlign = textAlign;
-                glname.appendChild(statusUI.element);
+                if(gmc.get('USE_LIST_TASK_STATUS')) {
+                    const statusUI = monitorTask.addGid(gid);
+                    statusUI.element.style.textAlign = textAlign;
+                    glname.appendChild(statusUI.element);
+                }
+                glname.appendChild(bridgeProgressMonitor.watchGallery(gid));
 
                 const listTypeDom = document.querySelector("#dms select > option[selected]");
                 const listType = listTypeDom ? listTypeDom.value : '';
