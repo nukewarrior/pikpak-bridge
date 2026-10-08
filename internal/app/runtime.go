@@ -371,7 +371,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			CleanupEnabled: cfg.Cleanup.Enabled,
 			CleanupDelay:   cleanupDelay,
 		}),
-		canceller: worker.NewCanceller(db, provider, registry, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
+		canceller: worker.NewCanceller(db, provider, backend, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
 	}, nil
 }
 
