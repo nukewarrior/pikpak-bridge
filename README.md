@@ -5,6 +5,7 @@ A lightweight bridge that uses a pool of PikPak accounts for offline downloads a
 ## Documentation
 
 - [Code review and prioritized improvement backlog (2026-10-08, 中文)](docs/code-review-2026-10-08.md)
+- [EhAria2 + PikPak Bridge 用户脚本（安装、配置及授权）](userscripts/README.md)
 
 ## Workflow
 
