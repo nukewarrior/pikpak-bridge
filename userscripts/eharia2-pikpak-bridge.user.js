@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.12
+// @version      1.3.13
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -831,6 +831,9 @@ const BRIDGE_TARGET_STYLE = `
 .aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-error:empty {
     display: none;
 }
+.aria2helper-bridge-dialog select[hidden] {
+    display: none;
+}
 .aria2helper-bridge-actions {
     display: flex;
     gap: 8px;
@@ -1412,10 +1415,10 @@ function chooseAria2Directory(rpc, fileInfo = null) {
     });
 }
 
-function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
-    if(targets.length === 1) return Promise.resolve(targets[0]);
-
-    return new Promise(resolve => {
+// Render immediately, even when the Bridge target lookup is still pending.
+// A single enabled target continues to be selected automatically.
+function chooseBridgeTarget(targetsOrPromise, baseURL, fileInfo = null) {
+    return new Promise((resolve, reject) => {
         const previousFocus = document.activeElement;
         const overlay = document.createElement('div');
         overlay.className = 'aria2helper-bridge-overlay';
@@ -1428,17 +1431,13 @@ function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
         const title = document.createElement('h3');
         title.textContent = '选择下载目标';
         const explanation = document.createElement('p');
-        explanation.textContent = '以下目标实时获取自 PikPak Bridge：';
+        explanation.textContent = '正在获取 PikPak Bridge 下载目标…';
+        explanation.setAttribute('role', 'status');
+        explanation.setAttribute('aria-live', 'polite');
         const select = document.createElement('select');
         select.setAttribute('aria-label', '下载目标');
-        for(const target of targets) {
-            const option = document.createElement('option');
-            option.value = target.id;
-            option.textContent = target.name +
-                (target.dir ? ' · ' + target.dir : '');
-            select.appendChild(option);
-        }
-        select.value = preferredBridgeTarget(targets, baseURL).id;
+        select.hidden = true;
+        select.disabled = true;
 
         const actions = document.createElement('div');
         actions.className = 'aria2helper-bridge-actions';
@@ -1449,12 +1448,17 @@ function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
         confirm.type = 'button';
         confirm.textContent = '发送到 PikPak';
         confirm.className = 'aria2helper-bridge-confirm';
+        confirm.disabled = true;
 
-        const finish = value => {
+        let closed = false;
+        const finish = (value, error = null) => {
+            if(closed) return;
+            closed = true;
             document.removeEventListener('keydown', onKeydown, true);
             overlay.remove();
             if(previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
-            resolve(value);
+            if(error) reject(error);
+            else resolve(value);
         };
         const onKeydown = event => {
             if(event.key === 'Escape') {
@@ -1462,8 +1466,32 @@ function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
                 finish(null);
             }
         };
+        const showTargets = targets => {
+            if(closed) return; // Ignore late responses after cancel.
+            if(!Array.isArray(targets) || !targets.length) {
+                finish(null, new Error('Bridge 没有可用的下载目标'));
+                return;
+            }
+            if(targets.length === 1) {
+                finish(targets[0]);
+                return;
+            }
+            for(const target of targets) {
+                const option = document.createElement('option');
+                option.value = target.id;
+                option.textContent = target.name + (target.dir ? ' · ' + target.dir : '');
+                select.appendChild(option);
+            }
+            select.value = preferredBridgeTarget(targets, baseURL).id;
+            select.hidden = false;
+            select.disabled = false;
+            confirm.disabled = false;
+            explanation.textContent = '以下目标实时获取自 PikPak Bridge：';
+            select.focus();
+            confirm.onclick = () => finish(targets.find(target => target.id === select.value) || null);
+        };
+
         cancel.onclick = () => finish(null);
-        confirm.onclick = () => finish(targets.find(target => target.id === select.value) || null);
         overlay.onclick = event => {
             if(event.target === overlay) finish(null);
         };
@@ -1478,7 +1506,13 @@ function chooseBridgeTarget(targets, baseURL, fileInfo = null) {
         overlay.appendChild(dialog);
         document.addEventListener('keydown', onKeydown, true);
         document.body.appendChild(overlay);
-        select.focus();
+        cancel.focus();
+
+        // Direct callers may still supply a resolved target array.
+        if(Array.isArray(targetsOrPromise)) showTargets(targetsOrPromise);
+        else Promise.resolve(targetsOrPromise).then(showTargets, error => {
+            if(!closed) finish(null, error);
+        });
     });
 }
 
@@ -1517,17 +1551,16 @@ async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
     const originalText = button.tagName === 'INPUT' ? button.value : button.textContent;
     button.dataset.bridgeBusy = '1';
     if('disabled' in button) button.disabled = true;
-    setBridgeButtonText(button, '发送中…');
+    setBridgeButtonText(button, '获取目标…');
     try {
-        const magnet = await bridgeMagnetFromTorrentLink(torrentLink);
         const client = new PikPakBridgeClient(gmc.get('BRIDGE_URL'));
-        setBridgeButtonText(button, '获取目标…');
-        const targets = await client.listTargets();
-        const selected = await chooseBridgeTarget(targets, client.baseURL, fileInfo);
+        const selected = await chooseBridgeTarget(client.listTargets(), client.baseURL, fileInfo);
         if(!selected) {
             setBridgeButtonText(button, originalText);
             return;
         }
+        setBridgeButtonText(button, '解析种子…');
+        const magnet = await bridgeMagnetFromTorrentLink(torrentLink);
         setBridgeButtonText(button, '提交中…');
         const task = await client.addTask(magnet, selected.id);
         if(!task.duplicate) {
