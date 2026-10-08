@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.7
+// @version      1.3.8
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -352,6 +352,7 @@ const ONE_CLICK_STYLE = `
     background: ${IS_EX ? '#fff': '#5c0d12'};
     color:  ${IS_EX ? '#000': '#fff'};
 }
+
 #btList table {
     border-spacing:0;
     border-collapse:collapse;
@@ -376,6 +377,39 @@ const ONE_CLICK_STYLE = `
 #btList tr>td:last-child, #btList tr>th:last-child {
     padding-right: 8px;
 }
+
+/* Torrent actions share one table cell, avoiding column-specific spacing. */
+#btList tr td.bt-actions-cell {
+    padding: 2px 8px;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+#btList .bt-actions-group {
+    display: inline-flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+#btList .bt-actions-group .aria2helper-one-click {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    border-radius: 50%;
+    font-size: 12px;
+    line-height: 1;
+    vertical-align: middle;
+    text-align: center;
+}
+
 `;
 
 const SVG_LOADING_ICON = `<svg style="margin: auto; display: block; shape-rendering: auto;" width="24px" height="24px" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid">
@@ -1847,6 +1881,41 @@ function dateStr(date = new Date()){
     return date.getFullYear()+'年';
 }
 
+function torrentActionsCell(item, gid) {
+    const link = item.link;
+    // Existing delegated click listeners still target the three button classes.
+    return `<td class="bt-actions-cell nowrap"><div class="bt-actions-group" role="group" aria-label="种子操作">
+        <div data-link="${link}" data-gid="${gid}" class="aria2helper-one-click bt-download-button bt" title="发送到 aria2" aria-label="发送到 aria2">🡇</div>
+        <div data-link="${link}" data-gid="${gid}" class="aria2helper-one-click bt-copy-button icon bt" title="复制磁链" aria-label="复制磁链">✂</div>
+        <div data-link="${link}" data-gid="${gid}" class="aria2helper-one-click bt-bridge-button bt" title="发送到 PikPak Bridge" aria-label="发送到 PikPak Bridge">P</div>
+    </div></td>`;
+}
+
+function torrentListRow(item, gid, buttonLeft, twoLines, achievement) {
+    const actions = torrentActionsCell(item, gid);
+    const nameHtml = `<td class="bt-name"><a href="${item.link}">${item.name}</a></td>`;
+    const infoHtml = `<td class="bt-size nowrap"><span class="${achievement(item, 'size')}">${item.size}</span></td>
+        <td class="bt-time nowrap"><span title="${item.time.toLocaleString()}" class="${achievement(item, 'time')}">${item.readableTime}</span></td>
+        <td class="bt-seeds nowrap"><span class="${achievement(item, 'seeds')}">${item.seeds}</span></td>
+        <td class="bt-peers nowrap"><span class="${achievement(item, 'peers')}">${item.peers}</span></td>
+        <td class="bt-downloads nowrap"><span class="${achievement(item, 'downloads')}">${item.downloads}</span></td>`;
+    if(twoLines) {
+        return `<tr class="bt-item no-hover">
+            <td class="bt-name" colspan="6"><a href="${item.link}">${item.name}</a></td>
+        </tr>
+        <tr class="bt-item">
+            ${actions}
+            ${infoHtml}
+        </tr>`;
+    }
+    return `<tr class="bt-item">
+        ${buttonLeft ? actions : ''}
+        ${nameHtml}
+        ${infoHtml}
+        ${buttonLeft ? '' : actions}
+    </tr>`;
+}
+
 async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLeft = false, twoLines = false) {
     if(!btButtonBox) {
         btButtonBox = document.querySelector('#gd5 .g2:nth-child(3)');
@@ -1876,13 +1945,14 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                             <th><span title="下载完成 Downloads">✔️</span></th>`;
                         }else {
                             th = `
-                            ${buttonLeft ? "<th></th><th></th><th></th>" : ""}
+                            ${buttonLeft ? "<th></th>" : ""}
                             <th>名称</th>
                             <th>体积</th>
                             <th>时间</th>
                             <th><span title="正在做种 Seeds">📤</span></th>
                             <th><span title="正在下载 Peers">📥</span></th>
-                            <th><span title="下载完成 Downloads">✔️</span></th>`;
+                            <th><span title="下载完成 Downloads">✔️</span></th>
+                            ${buttonLeft ? "" : "<th></th>"}`;
                         }
 
 
@@ -1891,37 +1961,7 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                         ${th}
                         </tr>
                         ${
-                            torents.map(item => {
-
-                                const button1 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-download-button bt ">🡇</div></td>`;
-                                const button2 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-copy-button icon bt" title="复制磁链" aria-label="复制磁链">✂</div></td>`;
-                                const button3 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-bridge-button bt" title="发送到 PikPak Bridge" aria-label="发送到 PikPak Bridge">P</div></td>`;
-                                    const nameHtml = `<td class="bt-name"><a href="${item.link}">${item.name}</a></td>`;
-                                    const infoHtml = `<td class="bt-size nowrap"><span class="${achievement(item, 'size')}">${item.size}</span></td>
-                                    <td class="bt-time nowrap"><span title="${item.time.toLocaleString()}" class="${achievement(item, 'time')}">${item.readableTime}</span></td>
-                                    <td class="bt-seeds nowrap"><span class="${achievement(item, 'seeds')}">${item.seeds}</span></td>
-                                    <td class="bt-peers nowrap"><span class="${achievement(item, 'peers')}">${item.peers}</span></td>
-                                    <td class="bt-downloads nowrap"><span class="${achievement(item, 'downloads')}">${item.downloads}</span></td>`;
-                                    if(twoLines) {
-                                        return `
-                                <tr class="bt-item no-hover">
-                                    ${nameHtml}
-                                </tr>
-                                <tr class="bt-item">
-                                    ${button1 + button2 + button3}
-                                    ${infoHtml}
-                                </tr>
-                                `;
-                                    }
-                                return `
-                                <tr class="bt-item">
-                                    ${buttonLeft ? button1 + button2 + button3 : ''}
-                                    ${nameHtml}
-                                    ${infoHtml}
-                                    ${buttonLeft ? '' :  button2 + button1 + button3 }
-                                </tr>
-                                `
-                            }).join('')
+                            torents.map(item => torrentListRow(item, gid, buttonLeft, twoLines, achievement)).join('')
                         }</table>`;
 
                         btListBox.onclick = async (event) => {
