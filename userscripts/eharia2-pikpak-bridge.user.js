@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.10
+// @version      1.3.11
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -236,12 +236,22 @@ const STYLE = `
     margin: 4px 4px;
 }
 
-/* Compact two-by-two actions only on the independent gallerytorrents.php page. */
+/* Reserve space in the site's table cell; otherwise width:100% compresses
+ * both columns to ~70px even when the desired grid width is 232px. */
+#torrentinfo td.aria2helper-torrent-actions-cell {
+    box-sizing: border-box;
+    width: 248px;
+    min-width: 248px;
+    padding: 8px;
+    vertical-align: middle;
+}
 #torrentinfo .aria2helper-torrent-actions-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, 112px);
+    grid-template-rows: 38px 38px;
     gap: 8px;
-    width: min(232px, 100%);
+    width: 232px;
+    min-width: 232px;
     margin: 8px auto 3px;
     box-sizing: border-box;
 }
@@ -251,6 +261,7 @@ const STYLE = `
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
     min-height: 0;
+    height: 38px;
     line-height: normal;
     margin: 0;
 }
@@ -261,8 +272,8 @@ const STYLE = `
     display: block;
     width: 100%;
     min-width: 0;
-    min-height: 34px;
-    height: auto;
+    min-height: 38px;
+    height: 38px;
     margin: 0;
     padding: 5px 4px;
     border: 1px solid #b3a5a5;
@@ -270,6 +281,7 @@ const STYLE = `
     text-align: center;
     font-size: 12px;
     line-height: 1.45;
+    white-space: nowrap;
     cursor: pointer;
 }
 #torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-button {
@@ -2189,6 +2201,11 @@ function arrangeTorrentPageActions(insertionPoint, widget) {
     grid.appendChild(info);
     copy.classList.add('aria2helper-native-action', 'aria2helper-native-copy');
     info.classList.add('aria2helper-native-action', 'aria2helper-native-info');
+    // The host is normally a <td>. Resolve an ancestor TD defensively so the
+    // width reservation also works when a site wrapper is inserted.
+    let cell = host;
+    while(cell && cell.tagName?.toUpperCase() !== 'TD') cell = cell.parentNode;
+    if(cell) cell.classList.add('aria2helper-torrent-actions-cell');
     if(!copy.title) copy.title = '复制磁力链';
     if(!info.title) info.title = '查看种子详细信息';
 
