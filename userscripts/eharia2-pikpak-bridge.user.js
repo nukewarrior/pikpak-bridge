@@ -508,7 +508,7 @@ const BRIDGE_TARGET_STYLE = `
 }
 .aria2helper-bridge-dialog {
     box-sizing: border-box;
-    width: min(440px, 100%);
+    width: min(560px, 100%);
     max-height: 85vh;
     overflow-y: auto;
     border-radius: 10px;
@@ -593,7 +593,7 @@ const BRIDGE_TARGET_STYLE = `
     font-size: 14px;
 }
 .aria2helper-aria2-dir-dialog {
-    width: min(520px, 100%);
+    width: min(560px, 100%);
 }
 .aria2helper-aria2-dir-dialog .aria2helper-aria2-dir-field {
     position: relative;
