@@ -219,6 +219,7 @@ function fakeDocument() {
             tagName: tagName.toUpperCase(),
             children: [],
             dataset: {},
+            classList: {add() {}, remove() {}, contains() {return false;}},
             value: '',
             appendChild(child) { child.parentNode = this; this.children.push(child); },
             remove() {
@@ -515,7 +516,8 @@ test('failed aria2 RPC preserves directory history and does not report success',
 });
 
 test('torrent page aria2 button prompts for directory and preserves cancellation and success behavior', async () => {
-    const {ctx,storage}=createHarness(()=>{});
+    const {ctx,storage,config}=createHarness(()=>{});
+    config.ARIA2_RPC='https://aria2.example.test/jsonrpc';
     const doc=fakeDocument();ctx.document=doc;
     const calls=[];
     ctx.aria2Mock={rpc:'rpc1',addUri(uri,dir){calls.push({uri,dir});return Promise.resolve('gid-123');}};
@@ -637,7 +639,7 @@ test('repeated scissors clicks while download is pending do not trigger multiple
 test('torrent page and popup preserve aria2 and add separate Bridge entries', () => {
     assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton\)/);
     assert.match(script, /const bridgeButton = event\.target\.closest/);
-    assert.match(script, /ariaClient\.addUri\(getTorrentLink\(link\), gmc\.get\('ARIA2_DIR'\)\)/);
+    assert.match(script, /submitToAria2\(getTorrentLink\(link\), dir\)/);
     assert.match(script, /class="aria2helper-one-click bt-bridge-button bt"/);
     assert.match(script, /@connect\s+\*/);
     assert.match(script, /event\.target\.closest\('.bt-copy-button'\)/);
