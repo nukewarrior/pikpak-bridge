@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.11
+// @version      1.3.12
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -247,7 +247,7 @@ const STYLE = `
 }
 #torrentinfo .aria2helper-torrent-actions-grid {
     display: grid;
-    grid-template-columns: repeat(2, 112px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-rows: 38px 38px;
     gap: 8px;
     width: 232px;
@@ -318,8 +318,30 @@ const STYLE = `
 #torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-info {
     grid-column: 2;
 }
+/* Keep site-native Copy Magnet and Information controls equal-width,
+ * even when site input styles specify a narrower width or float. */
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-action {
+    display: block !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    max-width: none !important;
+    float: none !important;
+}
 #torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-native-action:hover {
     background: rgba(160, 160, 160, 0.25);
+}
+/* Override the site's .stdbtn:hover appearance to preserve white text contrast. */
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-button:hover,
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-button:focus-visible {
+    background: #3c7022 !important;
+    border-color: #315d1b !important;
+    color: #fff !important;
+}
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-bridge-button:hover,
+#torrentinfo .aria2helper-torrent-actions-grid > .aria2helper-box > .aria2helper-bridge-button:focus-visible {
+    background: #11756e !important;
+    border-color: #0d5e58 !important;
+    color: #fff !important;
 }
 `;
 
@@ -2209,7 +2231,7 @@ function arrangeTorrentPageActions(insertionPoint, widget) {
     if(!copy.title) copy.title = '复制磁力链';
     if(!info.title) info.title = '查看种子详细信息';
 
-    widget.button.value = '↓ aria2';
+    widget.button.value = 'Aria2';
     widget.button.title = '发送到 aria2';
     widget.bridgeButton.value = 'PikPak';
     widget.bridgeButton.title = '发送到 PikPak Bridge';
