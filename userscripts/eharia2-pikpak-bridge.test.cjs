@@ -1289,3 +1289,117 @@ test('Bridge target request failure closes loading dialog and does not fetch Tor
     assert.equal(doc.listeners.size,0);
     assert.match(alerts[0],/超时/);
 });
+
+
+test('Bridge reports separate cloud and aria2 phase progress without mislabeling overall completion', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.t={status:'PIKPAK_RUNNING',pikpak_progress:64};
+    let p=evaluate(ctx,'bridgeProgressOf(t)');
+    assert.equal(p.label,'PikPak 云下载中 64%');
+    assert.equal(p.percent,64);
+    ctx.t={status:'ARIA2_DOWNLOADING',pikpak_progress:100};
+    ctx.downloads=[
+        {total_length:100,completed_length:20},
+        {expected_size:300,completed_length:180}
+    ];
+    p=evaluate(ctx,'bridgeProgressOf(t,downloads)');
+    assert.equal(p.percent,50);
+    assert.equal(p.label,'Aria2 下载中 50%');
+    ctx.t={status:'VERIFYING',pikpak_progress:100};
+    p=evaluate(ctx,'bridgeProgressOf(t,downloads)');
+    assert.equal(p.label,'校验中 50%');
+    ctx.t={status:'WAITING_ARIA2',pikpak_progress:100};
+    p=evaluate(ctx,'bridgeProgressOf(t,[])');
+    assert.equal(p.percent,null,'no false 100% overall progress while waiting for aria2');
+    ctx.t={status:'PIKPAK_FAILED',error:'云下载失败 <script>untrusted</script>'};
+    p=evaluate(ctx,'bridgeProgressOf(t)');
+    assert.equal(p.state,'failed');
+    assert.match(p.error,/untrusted/);
+    assert.equal(p.percent,null);
+    ctx.t={status:'COMPLETED'};
+    p=evaluate(ctx,'bridgeProgressOf(t)');
+    assert.equal(p.label,'已完成 100%');
+});
+
+test('Bridge tracked torrents in the same gallery remain independent and restore on reload', async () => {
+    const urlA='https://e-hentai.org/torrent/123/first.torrent';
+    const urlB='https://e-hentai.org/torrent/123/second.torrent';
+    const key='PIKPAK_BRIDGE_TRACKED_TASKS:https://bridge.example.test/base';
+    const storage=new Map();
+    const handler=req=>{
+        if(req.url.includes('/downloads')) {
+            assert.match(req.url,/task-b\/downloads/);
+            req.onload({status:200,responseText:JSON.stringify({downloads:[
+                {total_length:100,completed_length:20},
+                {total_length:100,completed_length:80}
+            ]})});
+        } else if(req.url.includes('/api/v1/tasks?')) {
+            req.onload({status:200,responseText:JSON.stringify({tasks:[
+                {id:'task-a',status:'PIKPAK_RUNNING',pikpak_progress:64},
+                {id:'task-b',status:'ARIA2_DOWNLOADING',pikpak_progress:100}
+            ]})});
+        } else throw new Error('unexpected request ' + req.url);
+    };
+    const {ctx,requests}=createHarness(handler,storage);
+    const doc=fakeDocument();ctx.document=doc;
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    ctx.urlA=urlA;ctx.urlB=urlB;
+    evaluate(ctx,"bridgeProgressMonitor.remember(urlA,'task-a',123,{name:'first.torrent'})");
+    evaluate(ctx,"bridgeProgressMonitor.remember(urlB,'task-b',123,{name:'second.torrent'})");
+    assert.equal(storage.get(key).length,2);
+    ctx.first=evaluate(ctx,'bridgeProgressMonitor.watchTorrent(urlA)');
+    ctx.second=evaluate(ctx,'bridgeProgressMonitor.watchTorrent(urlB)');
+    ctx.summary=evaluate(ctx,'bridgeProgressMonitor.watchGallery(123)');
+    await evaluate(ctx,'bridgeProgressMonitor.poll()');
+    assert.equal(ctx.first.children[0].textContent,'PikPak · PikPak 云下载中 64%');
+    assert.equal(ctx.second.children[0].textContent,'PikPak · Aria2 下载中 50%');
+    assert.match(ctx.summary.children[0].textContent,/PikPak \(2项\).*Aria2 下载中 50%/);
+    assert.equal(ctx.second.children[1].children[0].style.width,'50.00%');
+    assert.equal(requests.length,2,'one batch status request and only the active aria2 file request');
+
+    // Re-submitting one torrent (including a duplicate 409 task) replaces only that URL.
+    evaluate(ctx,"bridgeProgressMonitor.remember(urlA,'task-a',123)");
+    assert.equal(storage.get(key).length,2);
+
+    const reloaded=createHarness(handler,storage);
+    reloaded.ctx.document=fakeDocument();
+    reloaded.ctx.urlA=urlA;
+    evaluate(reloaded.ctx,'bridgeProgressMonitor.schedule = () => {}');
+    const again=evaluate(reloaded.ctx,'bridgeProgressMonitor.watchTorrent(urlA)');
+    assert.match(again.children[0].textContent,/查询任务中/);
+    await evaluate(reloaded.ctx,'bridgeProgressMonitor.poll()');
+    assert.equal(again.children[0].textContent,'PikPak · PikPak 云下载中 64%');
+});
+
+test('Bridge progress stops polling after terminal result and displays server errors safely', async () => {
+    const requests=[];
+    const {ctx}=createHarness(req => {
+        requests.push(req);
+        req.onload({status:200,responseText:JSON.stringify({
+            tasks:[{id:'task-failed',status:'ARIA2_FAILED',
+                error:'磁盘空间不足 <img src=x onerror=alert(1)>'}]
+        })});
+    });
+    ctx.document=fakeDocument();
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    ctx.link='https://e-hentai.org/torrent/123/error.torrent';
+    evaluate(ctx,"bridgeProgressMonitor.remember(link,'task-failed',123)");
+    const view=evaluate(ctx,'bridgeProgressMonitor.watchTorrent(link)');
+    await evaluate(ctx,'bridgeProgressMonitor.poll()');
+    assert.equal(view.dataset.state,'failed');
+    assert.match(view.title,/磁盘空间不足/);
+    assert.match(view.children[0].textContent,/PikPak · Aria2 失败.*磁盘空间不足/);
+    assert.equal(view.children[1].style.display,'none');
+    assert.equal(requests.length,1);
+});
+
+test('Bridge progress entry points do not replace direct aria2 polling or torrent actions', () => {
+    assert.match(script,/bridgeProgressMonitor\.remember\(torrentLink, task\.id, button\.dataset\.gid \|\| GID, fileInfo\)/);
+    assert.match(script,/bridgeProgressMonitor\.watchTorrent\(link\)/);
+    assert.match(script,/bridgeProgressMonitor\.watchTorrent\(item\.link\)/);
+    assert.match(script,/bridgeProgressMonitor\.watchGallery\(GID\)/);
+    assert.match(script,/bridgeProgressMonitor\.watchGallery\(gid\)/);
+    assert.match(script,/const batch = await ariaClient\.batchTellStatus\(this\.taskIds\)/);
+    assert.match(script,/return this\.getJSON\('\/api\/v1\/tasks\?limit=200'\)/);
+    assert.match(script,/return this\.getJSON\('\/api\/v1\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/downloads'\)/);
+});

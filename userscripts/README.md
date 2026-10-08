@@ -27,7 +27,7 @@
 - **独立种子页面 `gallerytorrents.php`** 的右侧操作区独立调整为两行两列：上排 aria2 / PikPak 下载，下排站点原生的复制磁力链 / Information。新布局对原生表格操作列预留 248px 宽度，四个按钮固定 38px 高、两列各 112px、间距 8px，避免站点原有窄列把按钮文字挤成多行；同时保留原生提交按钮节点、名称、表单归属及点击事件；如果未识别到两个原生控件，则保持旧布局，不影响下载。此改动**不作用于画廊种子快捷弹窗**。
 - HTTP **201** 显示“已提交”；HTTP **409** 携带 `existing_task_id` 时显示“已存在”，不会重复创建。
 - 其他状态、网络异常或无法提取 BTIH 时显示失败原因。
-- 第一版**不在 E-Hentai 页面显示 PikPak/aria2 桥接进度**；可在 pikpak-bridge Web UI 中查看任务。原脚本的 aria2 进度显示不变。
+- **PikPak Bridge 进度**：提交成功后按种子链接保存对应 Bridge 任务 ID（重复任务返回已有 ID 时也会关联），并在种子页、种子快捷弹窗、画廊详情页及列表页显示状态；页面重开后恢复关联。进行中的关联任务约每 5 秒查询一次 Bridge，PikPak 阶段显示云下载百分比，进入 Aria2 阶段后按下载文件的已完成/总大小显示百分比，等待、校验、清理、失败及完成单独标记。百分比仅指当前阶段，不能当作整个任务总进度；已终止任务停止高频轮询。原脚本的直接 Aria2 进度显示不变。
 - 存档直链（`hath.network/archive`）**仍只发送至原 aria2**，不走 PikPak Bridge。
 
 ### 下载确认弹窗中的文件信息
@@ -57,7 +57,7 @@
 ## 来源和授权
 
 - 原始作者：xioxin、SchneeHertz；原始项目：[EhTagTranslation/UserScripts](https://github.com/EhTagTranslation/UserScripts)
-- 上游版本：EhAria2 v1.2；本地修改版：v1.3.13
+- 上游版本：EhAria2 v1.2；本地修改版：v1.3.14
 - 衍生脚本保留原作者署名并依照 **GNU GPL v3** 分发，许可证全文见 [LICENSE](LICENSE)。此许可声明针对本目录派生的用户脚本，不改变 `pikpak-bridge` 其他独立代码的授权。
 - 后续可通过脚本头部的 `@updateURL` / `@downloadURL` 从本仓库同步更新。
 
