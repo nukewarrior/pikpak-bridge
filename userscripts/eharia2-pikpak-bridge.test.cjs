@@ -1048,6 +1048,8 @@ test('torrent page grid keeps the original native controls and form semantics', 
     assert.equal(grid.className,'aria2helper-torrent-actions-grid');
     assert.deepEqual(grid.children,[widget.element,nativeCopy,nativeInfo]);
     assert.equal(grid.parentNode,host);
+    assert.equal(host.classList.contains('aria2helper-torrent-actions-cell'),true,
+        'the actual table cell must reserve enough width for two full-size buttons');
     assert.equal(form.children[0],host);
     assert.equal(nativeCopy.type,'submit');
     assert.equal(nativeInfo.type,'submit');
@@ -1064,6 +1066,33 @@ test('torrent page grid keeps the original native controls and form semantics', 
     assert.equal(widget.bridgeButton.title,'发送到 PikPak Bridge');
     assert.equal(evaluate(ctx,'arrangeTorrentPageActions(insertionPoint, widget)'),false);
     assert.deepEqual(grid.children,[widget.element,nativeCopy,nativeInfo],'repeat activation does not rearrange nodes');
+});
+
+test('torrent grid reserves width through a wrapper and never changes unrelated gallery cells', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    const outer=doc.createElement('table');
+    const row=doc.createElement('tr');
+    const titleCell=doc.createElement('td');
+    const actionCell=doc.createElement('td');
+    const inner=doc.createElement('div');
+    outer.appendChild(row);
+    row.appendChild(titleCell);
+    row.appendChild(actionCell);
+    actionCell.appendChild(inner);
+    const widget=evaluate(ctx,"new SendTaskButton(1,'https://e-hentai.org/torrent/example.torrent')");
+    ctx.widget=widget;
+    const nativeCopy=doc.createElement('input');nativeCopy.value='Copy Magnet Link';
+    const nativeInfo=doc.createElement('input');nativeInfo.value='Information';
+    inner.appendChild(widget.element);
+    inner.appendChild(nativeCopy);
+    inner.appendChild(nativeInfo);
+    ctx.insertionPoint=nativeCopy;
+    assert.equal(evaluate(ctx,'arrangeTorrentPageActions(insertionPoint,widget)'),true);
+    assert.equal(actionCell.classList.contains('aria2helper-torrent-actions-cell'),true);
+    assert.equal(titleCell.classList.contains('aria2helper-torrent-actions-cell'),false);
+    assert.equal(inner.children[0].className,'aria2helper-torrent-actions-grid');
+    assert.equal(inner.children[0].children.length,3);
 });
 
 test('torrent page leaves original controls untouched if the required native buttons cannot be identified', () => {
@@ -1086,7 +1115,10 @@ test('torrent page leaves original controls untouched if the required native but
 });
 
 test('torrent page action grid is scoped, two rows by two columns, and preserves handlers', () => {
-    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\);[^}]*gap:\s*8px;/s);
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*112px\);[^}]*grid-template-rows:\s*38px 38px;[^}]*gap:\s*8px;[^}]*width:\s*232px;[^}]*min-width:\s*232px;/s);
+    assert.match(script, /#torrentinfo td\.aria2helper-torrent-actions-cell\s*\{[^}]*width:\s*248px;[^}]*min-width:\s*248px;/s);
+    assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid > \.aria2helper-box > \.aria2helper-button[\s\S]*?white-space:\s*nowrap;/);
+    assert.doesNotMatch(script, /width:\s*min\(232px,\s*100%\)/);
     assert.match(script, /#torrentinfo \.aria2helper-torrent-actions-grid > \.aria2helper-box\s*\{[^}]*grid-column:\s*1 \/ -1;/s);
     assert.match(script, /\.aria2helper-native-action\s*\{[^}]*grid-row:\s*2;/s);
     assert.match(script, /\.aria2helper-native-copy\s*\{\s*grid-column:\s*1;/s);
