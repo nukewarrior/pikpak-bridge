@@ -19,6 +19,7 @@ import (
 type aria2Store interface {
 	ListAria2Work(ctx context.Context, now time.Time, limit int) ([]domain.Task, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
+	GetTask(ctx context.Context, id string) (domain.Task, error)
 	EnsureDownloads(ctx context.Context, taskID, instanceID string, gidFor func(string, string) string) error
 	ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error)
 	SaveDownload(ctx context.Context, download *domain.Download) error
@@ -30,6 +31,7 @@ type Aria2Options struct {
 	StatusInterval time.Duration
 	RetryInterval  time.Duration
 	MaxRetry       int
+	Locks          *TaskLocks
 }
 
 type Aria2Worker struct {
@@ -37,6 +39,7 @@ type Aria2Worker struct {
 	pikpak  pikpak.Provider
 	backend aria2.Backend
 	options Aria2Options
+	locks *TaskLocks
 }
 
 func NewAria2(store aria2Store, provider pikpak.Provider, backend aria2.Backend, options Aria2Options) *Aria2Worker {
@@ -52,7 +55,8 @@ func NewAria2(store aria2Store, provider pikpak.Provider, backend aria2.Backend,
 	if options.MaxRetry <= 0 {
 		options.MaxRetry = 10
 	}
-	return &Aria2Worker{store: store, pikpak: provider, backend: backend, options: options}
+	if options.Locks == nil { options.Locks = NewTaskLocks() }
+	return &Aria2Worker{store: store, pikpak: provider, backend: backend, options: options, locks: options.Locks}
 }
 
 func (w *Aria2Worker) Run(ctx context.Context) {
@@ -90,8 +94,12 @@ func (w *Aria2Worker) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("aria2 任务处理失败", "task_id", tasks[i].ID, "error", err)
+		unlock := w.locks.Lock(tasks[i].ID)
+		current, loadErr := w.store.GetTask(ctx, tasks[i].ID)
+		if loadErr == nil && (current.Status == domain.TaskWaitingAria2 || current.Status == domain.TaskAria2Downloading) { loadErr = w.processTask(ctx, &current) }
+		unlock()
+		if loadErr != nil {
+			slog.Warn("aria2 任务处理失败", "task_id", tasks[i].ID, "error", loadErr)
 		}
 	}
 	return nil

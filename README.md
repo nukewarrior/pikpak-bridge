@@ -91,6 +91,7 @@ The core pipeline includes:
 - multi-account PikPak pool scheduling
 - per-account concurrency limits and cooldowns
 - durable offline-task state and restart recovery
+- asynchronous task cancellation and durable remote cleanup retry
 - explicit Download Targets
 - multi-instance aria2 registry
 - persistent per-file aria2 progress and deterministic GID recovery
@@ -223,6 +224,12 @@ GET /healthz
 ~~~
 
 A normalized source is globally unique while its task exists. This preserves the invariant that one bridge task owns one PikPak offline task/root and is the only task allowed to clean it up.
+
+## Cancellation recovery
+
+Cancel requests enter `CANCELLING` and return HTTP 202. The cancellation worker stops aria2 downloads, cancels the exact recorded PikPak offline task, and deletes the recorded root. Only after successful cleanup does the task become `CANCELLED`. Failures remain in `CANCELLING` and automatically retry with capped exponential backoff across restarts.
+
+An in-flight PikPak submission is recorded before ordinary state transitions resume. If PikPak accepted a submission but its task ID was lost during a crash or uncertain network failure, cancellation remains blocked with an explicit warning rather than incorrectly reporting successful cleanup; manual reconciliation may be needed.
 
 ## Safety
 

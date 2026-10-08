@@ -14,6 +14,7 @@ const STATUS = {
   PIKPAK_DELETING: ["清理 PikPak", "active"],
   COMPLETED: ["已完成", "success"],
   CANCELLED: ["已取消", ""],
+  CANCELLING: ["正在取消与清理", "warn"],
   PIKPAK_FAILED: ["PikPak 失败", "fail"],
   ARIA2_FAILED: ["aria2 失败", "fail"],
   VERIFY_FAILED: ["校验失败", "fail"],
@@ -30,7 +31,7 @@ const STATUS = {
 const ACTIVE = new Set([
   "QUEUED","WAITING_PIKPAK_ACCOUNT","PIKPAK_SUBMITTING","PIKPAK_RUNNING",
   "PIKPAK_COMPLETE","RESOLVING_FILES","WAITING_ARIA2","ARIA2_DOWNLOADING",
-  "VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING"
+  "VERIFYING","READY_TO_CLEANUP","PIKPAK_DELETING","CANCELLING"
 ]);
 
 const FAILED_TASKS = new Set([
@@ -64,6 +65,9 @@ function eventLabel(type) {
     "pikpak.account_rejected": "PikPak 账号不可用",
     "task.cancelled": "任务已取消",
     "task.cancel_cleanup_failed": "取消后清理异常",
+    "task.cancel_requested": "用户请求取消",
+    "task.cancel_retry": "取消清理失败，稍后重试",
+    "task.cancel_blocked": "等待远端提交结果",
     "verify.failed": "校验失败",
     "cleanup.retry": "清理重试",
     "cleanup.failed": "清理失败"
@@ -958,7 +962,7 @@ async function openTask(id) {
     const downloads = downloadsData.downloads || [];
     const events = (eventsData.events || []).filter(isErrorHistoryEvent);
     const canRetry = FAILED_TASKS.has(task.status);
-    const canCancel = ACTIVE.has(task.status);
+    const canCancel = ACTIVE.has(task.status) && task.status !== "CANCELLING";
     $("dialogBody").innerHTML = `
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
@@ -1035,8 +1039,7 @@ async function openTask(id) {
         cancelButton.disabled = true;
         try {
           const result = await request(`/api/v1/tasks/${encodeURIComponent(id)}/cancel`, {method:"POST"});
-          const warnings = result.cleanup_warnings || [];
-          toast(warnings.length ? "任务已取消，但部分远端资源清理失败。" : "任务已取消。", warnings.length > 0);
+          toast("已提交取消请求，后台将持续重试远端清理直至完成。");
           await Promise.all([loadTasks(), loadHistoryTasks()]);
           await openTask(id);
         } catch (err) {

@@ -15,6 +15,7 @@ type finalizeStore interface {
 	ListFinalizeWork(ctx context.Context, now time.Time, limit int) ([]domain.Task, error)
 	ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
+	GetTask(ctx context.Context, id string) (domain.Task, error)
 }
 
 type FinalizeOptions struct {
@@ -24,12 +25,14 @@ type FinalizeOptions struct {
 	VerifySize     bool
 	CleanupEnabled bool
 	CleanupDelay   time.Duration
+	Locks          *TaskLocks
 }
 
 type Finalizer struct {
 	store    finalizeStore
 	provider pikpak.Provider
 	options  FinalizeOptions
+	locks *TaskLocks
 }
 
 func NewFinalizer(store finalizeStore, provider pikpak.Provider, options FinalizeOptions) *Finalizer {
@@ -45,7 +48,8 @@ func NewFinalizer(store finalizeStore, provider pikpak.Provider, options Finaliz
 	if options.CleanupDelay < 0 {
 		options.CleanupDelay = 0
 	}
-	return &Finalizer{store: store, provider: provider, options: options}
+	if options.Locks == nil { options.Locks = NewTaskLocks() }
+	return &Finalizer{store: store, provider: provider, options: options, locks: options.Locks}
 }
 
 func (w *Finalizer) Run(ctx context.Context) {
@@ -83,8 +87,12 @@ func (w *Finalizer) RunOnce(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := w.processTask(ctx, &tasks[i]); err != nil {
-			slog.Warn("任务收尾处理失败", "task_id", tasks[i].ID, "error", err)
+		unlock := w.locks.Lock(tasks[i].ID)
+		current, loadErr := w.store.GetTask(ctx, tasks[i].ID)
+		if loadErr == nil { loadErr = w.processTask(ctx, &current) }
+		unlock()
+		if loadErr != nil {
+			slog.Warn("任务收尾处理失败", "task_id", tasks[i].ID, "error", loadErr)
 		}
 	}
 	return nil
