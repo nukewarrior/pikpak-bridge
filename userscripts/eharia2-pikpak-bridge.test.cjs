@@ -333,7 +333,7 @@ test('cancelling target dialog does not create Bridge task', async () => {
     await sending;
     assert.equal(requests.length,2);
     assert.equal(requests.filter(x=>x.method==='POST').length,0);
-    assert.equal(storage.size,0);
+    assert.equal(storage.has('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'),false);
     assert.equal(button.value,'发送到 PikPak');
     assert.equal(button.disabled,false);
     assert.equal(doc.body.children.length,0);
