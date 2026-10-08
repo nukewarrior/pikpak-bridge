@@ -779,8 +779,8 @@ test('archive download confirmation shows only provided metadata and cancellatio
 });
 
 test('download metadata is threaded through every torrent and gallery action', () => {
-    assert.match(script,/torrents\.find\(item => item\.link === bridgeButton\.dataset\.link\)/);
-    assert.match(script,/torrents\.find\(item => item\.link === ariaButton\.dataset\.link\)/);
+    assert.match(script,/torents\.find\(item => item\.link === bridgeButton\.dataset\.link\)/);
+    assert.match(script,/torents\.find\(item => item\.link === ariaButton\.dataset\.link\)/);
     assert.match(script,/sendTorrentToBridge\(bridgeButton\.dataset\.link, bridgeButton, info\)/);
     assert.match(script,/chooseAria2Directory\(ariaClient\.rpc, info\)/);
     assert.match(script,/new SendTaskButton\(GID, link, torrentPageFileInfo\(table\)\)/);
