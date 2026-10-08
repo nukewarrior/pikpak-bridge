@@ -190,6 +190,17 @@ test('server error, malformed JSON, network error and timeout reject', async () 
 });
 
 
+async function waitForBridgeTargets(doc) {
+    await waitForDialog(doc);
+    for(let i=0; i<100; i++) {
+        const dialog=doc.body.children[0]?.children[0];
+        const select=dialog?.children.find(child => child.tagName === 'SELECT');
+        if(select && !select.disabled) return;
+        await new Promise(resolve => setImmediate(resolve));
+    }
+    throw new Error('Bridge targets did not become selectable');
+}
+
 async function waitForDialog(doc) {
     for(let i=0;i<100;i++) {
         if(doc.body.children.length) return;
@@ -300,17 +311,19 @@ test('one available target submits automatically without asking or config target
             request.onload({status:201,responseText:'{"id":"task-123","status":"QUEUED"}'});
         }
     }));
+    const doc=fakeDocument();ctx.document=doc;
     const button = {tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton = button;
     await evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
     assert.equal(requests.length,3);
-    assert.equal(requests[0].responseType,'arraybuffer');
-    assert.equal(requests[1].method,'GET');
+    assert.equal(requests[0].method,'GET');
+    assert.equal(requests[1].responseType,'arraybuffer');
     assert.equal(requests[2].method,'POST');
     assert.equal(JSON.parse(requests[2].data).target,'movies');
     assert.equal(storage.get('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'), 'movies');
     assert.equal(button.value,'已提交');
     assert.equal(button.disabled,false);
+    assert.equal(doc.body.children.length,0,'single target auto-selects and dismisses the loading dialog');
 });
 
 test('multiple targets present a dialog with server-provided names; selected ID is submitted', async () => {
@@ -328,7 +341,7 @@ test('multiple targets present a dialog with server-provided names; selected ID 
     const button = {tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton=button;
     const sending = evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    await waitForDialog(doc);
+    await waitForBridgeTargets(doc);
     assert.equal(doc.body.children.length,1);
     const dialog=doc.body.children[0].children[0];
     assert.equal(dialog['role'],'dialog');
@@ -354,11 +367,11 @@ test('cancelling target dialog does not create Bridge task', async () => {
     const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton=button;
     const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    await waitForDialog(doc);
+    await waitForBridgeTargets(doc);
     const cancel=doc.body.children[0].children[0].children[3].children[0];
     cancel.onclick();
     await sending;
-    assert.equal(requests.length,2);
+    assert.equal(requests.length,1,'cancel must skip Torrent download');
     assert.equal(requests.filter(x=>x.method==='POST').length,0);
     assert.equal(storage.has('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'),false);
     assert.equal(button.value,'发送到 PikPak');
@@ -383,7 +396,7 @@ test('last successfully used target is selected after reloading the user script'
     const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
     ctx.testButton=button;
     const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-    await waitForDialog(doc);
+    await waitForBridgeTargets(doc);
     const dialog=doc.body.children[0].children[0];
     const select=dialog.children[2];
     assert.equal(select.value,'tv', 'last used target should override server default');
@@ -429,7 +442,7 @@ test('duplicate and failed submissions must not overwrite the last successful ta
         const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
         ctx.testButton=button;
         const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
-        await waitForDialog(doc);
+        await waitForBridgeTargets(doc);
         // User chose a different target, but request did not create a new task.
         doc.body.children[0].children[0].children[2].value='movies';
         doc.body.children[0].children[0].children[3].children[1].onclick();
@@ -1205,4 +1218,74 @@ test('torrent page native buttons stretch to equal widths and keep vivid hover t
     assert.match(script, /\.aria2helper-button:hover,[\s\S]*?background:\s*#3c7022\s*!important;[^}]*color:\s*#fff\s*!important;/);
     assert.match(script, /\.aria2helper-bridge-button:hover,[\s\S]*?background:\s*#11756e\s*!important;[^}]*color:\s*#fff\s*!important;/);
     assert.doesNotMatch(script, /widget\.button\.value\s*=\s*['"]↓\s*aria2/);
+});
+
+test('PikPak shows loading dialog before network completes and defers Torrent until confirmation', async () => {
+    let pendingTargets;
+    const {ctx,requests}=createHarness(req => {
+        if(req.url.endsWith('/api/v1/targets')) {
+            pendingTargets=req;
+        } else if(req.responseType==='arraybuffer') {
+            req.onload({status:200,response:exampleTorrent().arrayBuffer});
+        } else {
+            req.onload({status:201,responseText:'{"id":"task-confirmed"}'});
+        }
+    });
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    assert.equal(doc.body.children.length,1,'show modal synchronously, without waiting for GET');
+    const dialog=doc.body.children[0].children[0];
+    assert.match(dialog.children[1].textContent,/正在获取/);
+    assert.equal(dialog.children[2].hidden,true);
+    assert.equal(dialog.children[3].children[1].disabled,true);
+    assert.equal(requests.length,1,'no Torrent download while loading target list');
+    assert.equal(requests[0].method,'GET');
+    pendingTargets.onload({status:200,responseText:JSON.stringify({
+        targets:[{id:'first',name:'First'},{id:'second',name:'Second'}]
+    })});
+    await waitForBridgeTargets(doc);
+    assert.equal(dialog.children[2].hidden,false);
+    assert.equal(dialog.children[3].children[1].disabled,false);
+    assert.equal(requests.length,1,'rendering target list must not fetch Torrent');
+    dialog.children[3].children[1].onclick();
+    await sending;
+    assert.equal(requests.length,3);
+    assert.equal(requests[1].responseType,'arraybuffer');
+    assert.equal(requests[2].method,'POST');
+    assert.equal(doc.body.children.length,0);
+});
+
+test('cancel during PikPak target loading ignores late responses without fetching Torrent', async () => {
+    let pendingTargets;
+    const {ctx,requests,alerts}=createHarness(req => {pendingTargets=req;});
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    assert.equal(doc.body.children.length,1);
+    doc.body.children[0].children[0].children[3].children[0].onclick();
+    await sending;
+    assert.equal(doc.body.children.length,0);
+    assert.equal(doc.listeners.size,0);
+    assert.equal(requests.length,1);
+    assert.equal(button.disabled,false);
+    pendingTargets.onload({status:200,responseText:'{"targets":[{"id":"one"}]}'});
+    await Promise.resolve();
+    assert.equal(doc.body.children.length,0);
+    assert.equal(requests.length,1);
+    assert.equal(alerts.length,0);
+});
+
+test('Bridge target request failure closes loading dialog and does not fetch Torrent', async () => {
+    const {ctx,requests,alerts}=createHarness(req => req.ontimeout({}));
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    await evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    assert.equal(requests.length,1);
+    assert.equal(doc.body.children.length,0);
+    assert.equal(doc.listeners.size,0);
+    assert.match(alerts[0],/超时/);
 });
