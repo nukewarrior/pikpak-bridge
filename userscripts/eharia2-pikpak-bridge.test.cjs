@@ -10,7 +10,7 @@ const {createHash, webcrypto} = require('node:crypto');
 const script = fs.readFileSync(path.join(__dirname, 'eharia2-pikpak-bridge.user.js'), 'utf8');
 const hexHash = '0123456789abcdef0123456789abcdef01234567';
 
-function createHarness(respond) {
+function createHarness(respond, storage = new Map()) {
     const requests = [];
     const clipboard = [];
     const alerts = [];
@@ -36,8 +36,8 @@ function createHarness(respond) {
         }},
         GM_config: StubGMConfig,
         GM_registerMenuCommand() {},
-        GM_getValue() { return null; },
-        GM_setValue() {},
+        GM_getValue(key, fallback) { return storage.has(key) ? storage.get(key) : fallback; },
+        GM_setValue(key, value) { storage.set(key, value); },
         GM_setClipboard(value, type) { clipboard.push({value, type}); },
         GM_xmlhttpRequest(req) {
             requests.push(req);
@@ -53,7 +53,7 @@ function createHarness(respond) {
     };
     vm.createContext(ctx);
     vm.runInContext(script, ctx, {filename: 'eharia2-pikpak-bridge.user.js'});
-    return {ctx, requests, config, clipboard, alerts, delayedUpdates};
+    return {ctx, requests, config, clipboard, alerts, delayedUpdates, storage};
 }
 
 function evaluate(ctx, expression) {
@@ -266,7 +266,7 @@ test('unconfigured Bridge, invalid response and unreachable Bridge show actionab
 });
 
 test('one available target submits automatically without asking or config target', async () => {
-    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+    const {ctx, requests, storage} = createHarness(req => respondWithTorrent(req, request => {
         if(request.method === 'GET') {
             request.onload({status:200,responseText:JSON.stringify({targets:[{id:'movies',name:'电影'}]})});
         } else {
@@ -281,12 +281,13 @@ test('one available target submits automatically without asking or config target
     assert.equal(requests[1].method,'GET');
     assert.equal(requests[2].method,'POST');
     assert.equal(JSON.parse(requests[2].data).target,'movies');
+    assert.equal(storage.get('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'), 'movies');
     assert.equal(button.value,'已提交');
     assert.equal(button.disabled,false);
 });
 
 test('multiple targets present a dialog with server-provided names; selected ID is submitted', async () => {
-    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+    const {ctx, requests, storage} = createHarness(req => respondWithTorrent(req, request => {
         if(request.method === 'GET') {
             request.onload({status:200,responseText:JSON.stringify({targets:[
                 {id:'movies',name:'电影',dir:'/downloads/movies',default:true},
@@ -307,17 +308,19 @@ test('multiple targets present a dialog with server-provided names; selected ID 
     const select=dialog.children[2];
     assert.equal(select.value,'movies');
     assert.match(select.children[1].textContent,/电视剧/);
+    assert.doesNotMatch(select.children[0].textContent,/默认/);
     select.value='tv';
     dialog.children[3].children[1].onclick();
     await sending;
     assert.equal(requests.filter(x=>x.method==='POST').length,1);
     assert.equal(JSON.parse(requests[2].data).target,'tv');
+    assert.equal(storage.get('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'), 'tv');
     assert.equal(doc.body.children.length,0);
     assert.equal(doc.listeners.size,0);
 });
 
 test('cancelling target dialog does not create Bridge task', async () => {
-    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => request.onload({
+    const {ctx, requests, storage} = createHarness(req => respondWithTorrent(req, request => request.onload({
         status:200,responseText:JSON.stringify({targets:[{id:'a'},{id:'b'}]})
     })));
     const doc=fakeDocument();ctx.document=doc;
@@ -330,9 +333,84 @@ test('cancelling target dialog does not create Bridge task', async () => {
     await sending;
     assert.equal(requests.length,2);
     assert.equal(requests.filter(x=>x.method==='POST').length,0);
+    assert.equal(storage.has('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'),false);
     assert.equal(button.value,'发送到 PikPak');
     assert.equal(button.disabled,false);
     assert.equal(doc.body.children.length,0);
+});
+
+
+test('last successfully used target is selected after reloading the user script', async () => {
+    const storage = new Map([['PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base','tv']]);
+    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+        if(request.method === 'GET') {
+            request.onload({status:200,responseText:JSON.stringify({targets:[
+                {id:'movies',name:'电影',dir:'/movies',default:true},
+                {id:'tv',name:'电视剧',dir:'/tv'}
+            ]})});
+        } else {
+            request.onload({status:201,responseText:'{"id":"task-reloaded"}'});
+        }
+    }), storage);
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    const select=dialog.children[2];
+    assert.equal(select.value,'tv', 'last used target should override server default');
+    assert.doesNotMatch(select.children[0].textContent,/默认/);
+    assert.doesNotMatch(select.children[1].textContent,/默认/);
+    dialog.children[3].children[1].onclick();
+    await sending;
+    assert.equal(JSON.parse(requests[2].data).target,'tv');
+    assert.equal(storage.get('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base'),'tv');
+});
+
+test('missing or disabled last target falls back to server default, then first available', () => {
+    const storage=new Map([['PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base','removed']]);
+    const {ctx}=createHarness(()=>{},storage);
+    ctx.targets=[
+        {id:'first',name:'First',default:false},
+        {id:'default',name:'Default',default:true}
+    ];
+    const preferred = "preferredBridgeTarget(targets,'https://bridge.example.test/base').id";
+    assert.equal(evaluate(ctx, preferred), 'default');
+    ctx.targets=[{id:'first',name:'First'},{id:'other',name:'Other'}];
+    assert.equal(evaluate(ctx, preferred),'first');
+    storage.set('PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base','other');
+    assert.equal(evaluate(ctx, preferred),'other');
+    // Memory for a second Bridge must not leak into this service.
+    assert.equal(evaluate(ctx,"preferredBridgeTarget(targets,'https://another-bridge.example.test').id"),'first');
+});
+
+test('duplicate and failed submissions must not overwrite the last successful target', async () => {
+    const storage=new Map([['PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base','tv']]);
+    const baseKey='PIKPAK_BRIDGE_LAST_TARGET:https://bridge.example.test/base';
+    const handlers=[
+        req=>req.onload({status:409,responseText:'{"existing_task_id":"old-task","status":"PIKPAK_RUNNING","target_id":"tv"}'}),
+        req=>req.onload({status:503,responseText:'{"error":"offline"}'})
+    ];
+    for(const respondSubmit of handlers) {
+        const {ctx,alerts}=createHarness(req => respondWithTorrent(req, request => {
+            if(request.method==='GET') {
+                request.onload({status:200,responseText:JSON.stringify({targets:[{id:'movies',default:true},{id:'tv'}]})});
+            } else respondSubmit(request);
+        }),storage);
+        const doc=fakeDocument();ctx.document=doc;
+        const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+        ctx.testButton=button;
+        const sending=evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+        await waitForDialog(doc);
+        // User chose a different target, but request did not create a new task.
+        doc.body.children[0].children[0].children[2].value='movies';
+        doc.body.children[0].children[0].children[3].children[1].onclick();
+        await sending;
+        assert.equal(storage.get(baseKey),'tv');
+        assert.equal(doc.body.children.length,0);
+        assert.ok(alerts.length<=1);
+    }
 });
 
 test('scissors copies SHA-1 of real torrent info bytes and never submits to Bridge', async () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.3
+// @version      1.3.4
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -816,7 +816,19 @@ async function bridgeMagnetFromTorrentLink(link) {
     return magnet;
 }
 
-function chooseBridgeTarget(targets) {
+// Remember the last successful target separately for each Bridge service.
+function bridgeLastTargetStorageKey(baseURL) {
+    return 'PIKPAK_BRIDGE_LAST_TARGET:' + baseURL;
+}
+
+function preferredBridgeTarget(targets, baseURL) {
+    const lastID = GM_getValue(bridgeLastTargetStorageKey(baseURL), '');
+    return targets.find(target => target.id === lastID) ||
+        targets.find(target => target.default) ||
+        targets[0];
+}
+
+function chooseBridgeTarget(targets, baseURL) {
     if(targets.length === 1) return Promise.resolve(targets[0]);
 
     return new Promise(resolve => {
@@ -839,12 +851,10 @@ function chooseBridgeTarget(targets) {
             const option = document.createElement('option');
             option.value = target.id;
             option.textContent = target.name +
-                (target.default ? '（默认）' : '') +
                 (target.dir ? ' · ' + target.dir : '');
             select.appendChild(option);
         }
-        const preferred = targets.find(target => target.default) || targets[0];
-        select.value = preferred.id;
+        select.value = preferredBridgeTarget(targets, baseURL).id;
 
         const actions = document.createElement('div');
         actions.className = 'aria2helper-bridge-actions';
@@ -927,13 +937,16 @@ async function sendTorrentToBridge(torrentLink, button) {
         const client = new PikPakBridgeClient(gmc.get('BRIDGE_URL'));
         setBridgeButtonText(button, '获取目标…');
         const targets = await client.listTargets();
-        const selected = await chooseBridgeTarget(targets);
+        const selected = await chooseBridgeTarget(targets, client.baseURL);
         if(!selected) {
             setBridgeButtonText(button, originalText);
             return;
         }
         setBridgeButtonText(button, '提交中…');
         const task = await client.addTask(magnet, selected.id);
+        if(!task.duplicate) {
+            GM_setValue(bridgeLastTargetStorageKey(client.baseURL), selected.id);
+        }
         setBridgeButtonText(button, task.duplicate ? '已存在' : '已提交');
         button.title = (task.duplicate ? 'Bridge 中已有该任务' : 'Bridge 任务已创建') +
             '：' + task.id + (task.target ? '（目标：' + task.target + '）' : '');
