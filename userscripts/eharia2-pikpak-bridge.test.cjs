@@ -760,6 +760,118 @@ test('PikPak modal shows real torrent metadata and target selection remains func
     assert.equal(doc.body.children.length,0);
 });
 
+
+test('archive list: extended layout reads visible title even when cover link has no text', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.row={
+        textContent:'Manga 2026-10-08 77 pages uploader Example Gallery Title',
+        querySelector(selector) {
+            if(selector === '.glink') return {textContent:'[Anthology] Example Gallery [Chinese]'};
+            return null;
+        }
+    };
+    ctx.cover={href:'https://e-hentai.org/g/123/abc/',textContent:''};
+    const info=evaluate(ctx,'galleryListArchiveFileInfo(row)');
+    assert.equal(info.name,'[Anthology] Example Gallery [Chinese]');
+    assert.equal(info.pages,'77 pages');
+    assert.equal(info.size,'', 'listing without explicit File Size must not invent ZIP size');
+    assert.equal(info.kind,'archive');
+    assert.equal(ctx.cover.textContent,'','cover may lack text; title must come from row');
+    ctx.info=info;
+    const doc=fakeDocument();ctx.document=doc;
+    const card=evaluate(ctx,'makeDownloadFileInfo(info)');
+    assert.equal(card.children[1].children[0].textContent,'[Anthology] Example Gallery [Chinese]');
+    assert.deepEqual(card.children[1].children[1].children.map(x=>x.textContent),
+        ['ZIP 存档','页数：77 pages']);
+});
+
+test('archive list: compact, minimal, and thumbnail layouts use title nodes in their own gallery row', () => {
+    const samples=[
+        {layout:'compact',selector:'.glink',title:'Compact Gallery'},
+        {layout:'minimal',selector:'.glink',title:'Minimal Gallery'},
+        {layout:'thumbnail',selector:'.gl4t.glname',title:'Thumbnail Gallery'}
+    ];
+    const {ctx}=createHarness(()=>{});
+    for(const sample of samples) {
+        ctx.row={
+            textContent:sample.title+' 12 pages',
+            querySelector(selector) {
+                if(selector === sample.selector) return {textContent:sample.title};
+                return null;
+            }
+        };
+        const info=evaluate(ctx,'galleryListArchiveFileInfo(row)');
+        assert.equal(info.name,sample.title,sample.layout);
+        assert.equal(info.pages,'12 pages',sample.layout);
+        assert.equal(info.size,'',sample.layout);
+    }
+});
+
+test('archive list: missing title, explicit size and row isolation are handled independently', () => {
+    const {ctx}=createHarness(()=>{});
+    const values={
+        '.glink': {textContent:'   '},
+        '.glname a': {textContent:'Fallback title'}
+    };
+    ctx.row={
+        textContent:'This gallery File Size: 428.1 MiB 9 pages',
+        querySelector(selector) { return values[selector] || null; }
+    };
+    let info=evaluate(ctx,'galleryListArchiveFileInfo(row)');
+    assert.equal(info.name,'Fallback title');
+    assert.equal(info.size,'428.1 MiB');
+    assert.equal(info.pages,'9 pages');
+
+    ctx.row={
+        textContent:'No metadata to extract',
+        querySelector(){ return null; }
+    };
+    info=evaluate(ctx,'galleryListArchiveFileInfo(row)');
+    assert.equal(info.name,'');
+    assert.equal(info.size,'');
+    assert.equal(info.pages,'');
+    ctx.row=null;
+    assert.equal(evaluate(ctx,'galleryListArchiveFileInfo(row)').name,'');
+    assert.equal(evaluate(ctx,'makeDownloadFileInfo(galleryListArchiveFileInfo(row))'),null);
+});
+
+test('archive one-click: list metadata appears in aria2 modal without requesting paid URL before confirmation', async () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    ctx.aria2Mock={rpc:'rpc1',addUri(){throw new Error('must not submit')}}
+    evaluate(ctx,'ariaClient = aria2Mock');
+    let requestCount=0;
+    ctx.fetch=()=>{requestCount++;throw new Error('must not fetch paid archive')};
+    ctx.row={
+        textContent:'Gallery 77 pages',
+        querySelector(selector) {
+            return selector === '.glink' ? {textContent:'True Gallery Title'} : null;
+        }
+    };
+    const info=evaluate(ctx,'galleryListArchiveFileInfo(row)');
+    ctx.info=info;
+    const button=evaluate(ctx,"oneClickButton(123,'https://e-hentai.org/g/123/abc/',null,info)");
+    const pending=button.onclick();
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    assert.equal(dialog.children[2].className,'aria2helper-file-info');
+    assert.equal(dialog.children[2].children[1].children[0].textContent,'True Gallery Title');
+    assert.deepEqual(dialog.children[2].children[1].children[1].children.map(x=>x.textContent),
+        ['ZIP 存档','页数：77 pages']);
+    assert.equal(dialog.children[3].className,'aria2helper-aria2-dir-field');
+    dialog.children[5].children[0].onclick();
+    await pending;
+    assert.equal(requestCount,0);
+    assert.equal(doc.body.children.length,0);
+});
+
+test('archive one-click: gallery detail path keeps original metadata source and no extra requests', () => {
+    assert.match(script,/oneClickButton\(GID, null, archiverLink, archiveFileInfo\(\)\)/);
+    assert.match(script,/const fileInfo = galleryListArchiveFileInfo\(tr\)/);
+    assert.match(script,/oneClickButton\(gid, link, null, fileInfo\)/);
+    assert.doesNotMatch(script,/oneClickButton\(gid, link, null, archiveFileInfo\(a\.textContent\)\)/);
+});
+
 test('archive download confirmation shows only provided metadata and cancellation avoids fee request', async () => {
     const {ctx}=createHarness(()=>{});
     const doc=fakeDocument();ctx.document=doc;
@@ -784,7 +896,8 @@ test('download metadata is threaded through every torrent and gallery action', (
     assert.match(script,/sendTorrentToBridge\(bridgeButton\.dataset\.link, bridgeButton, info\)/);
     assert.match(script,/chooseAria2Directory\(ariaClient\.rpc, info\)/);
     assert.match(script,/new SendTaskButton\(GID, link, torrentPageFileInfo\(table\)\)/);
-    assert.match(script,/oneClickButton\(gid, link, null, archiveFileInfo\(a\.textContent\)\)/);
+    assert.match(script,/const fileInfo = galleryListArchiveFileInfo\(tr\)/);
+    assert.match(script,/oneClickButton\(gid, link, null, fileInfo\)/);
     assert.match(script,/oneClickButton\(GID, null, archiverLink, archiveFileInfo\(\)\)/);
 });
 
