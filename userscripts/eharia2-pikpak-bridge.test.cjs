@@ -165,7 +165,7 @@ test('configuration needs only Bridge URL and fetches enabled targets dynamicall
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, 'GET');
     assert.equal(requests[0].url, 'https://bridge.example.test/base/api/v1/targets');
-    assert.deepEqual(targets.map(x=>x.id), ['movies','tv']);
+    assert.deepEqual(Array.from(targets, x => x.id), ['movies','tv']);
     assert.equal(targets[0].default,true);
     assert.equal(targets[0].dir,'/downloads/movies');
 });
