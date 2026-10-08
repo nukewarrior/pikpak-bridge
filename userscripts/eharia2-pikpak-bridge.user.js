@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         EhAria2 + PikPak Bridge 下载助手
+// @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
 // @version      1.3.0
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
