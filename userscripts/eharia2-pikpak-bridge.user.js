@@ -353,8 +353,33 @@ const ONE_CLICK_STYLE = `
     color:  ${IS_EX ? '#000': '#fff'};
 }
 
+#btList table {
+    border-spacing:0;
+    border-collapse:collapse;
+    max-width: 80vw;
+}
+#btList tr th {
+    padding-bottom: 8px;
+    text-align: center;
+}
+#btList tr th span {
+    font-weight: 400;
+}
+#btList tr td {
+    padding: 2px 4px;
+}
+#btList tr:hover td {
+    background: rgba(${IS_EX ? '0,0,0': '255,255,255'}, 0.6);
+}
+#btList tr>td:first-of-type, #btList tr>th:first-of-type {
+    padding: 0 8px;
+}
+#btList tr>td:last-child, #btList tr>th:last-child {
+    padding-right: 8px;
+}
+
 /* Torrent actions share one table cell, avoiding column-specific spacing. */
-#btList td.bt-actions-cell {
+#btList tr td.bt-actions-cell {
     padding: 2px 8px;
     white-space: nowrap;
     vertical-align: middle;
@@ -385,30 +410,6 @@ const ONE_CLICK_STYLE = `
     text-align: center;
 }
 
-#btList table {
-    border-spacing:0;
-    border-collapse:collapse;
-    max-width: 80vw;
-}
-#btList tr th {
-    padding-bottom: 8px;
-    text-align: center;
-}
-#btList tr th span {
-    font-weight: 400;
-}
-#btList tr td {
-    padding: 2px 4px;
-}
-#btList tr:hover td {
-    background: rgba(${IS_EX ? '0,0,0': '255,255,255'}, 0.6);
-}
-#btList tr>td:first-of-type, #btList tr>th:first-of-type {
-    padding: 0 8px;
-}
-#btList tr>td:last-child, #btList tr>th:last-child {
-    padding-right: 8px;
-}
 `;
 
 const SVG_LOADING_ICON = `<svg style="margin: auto; display: block; shape-rendering: auto;" width="24px" height="24px" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid">
