@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.2
+// @version      1.3.3
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -886,6 +886,31 @@ function chooseBridgeTarget(targets) {
     });
 }
 
+// Keep magnet copying and PikPak submission on the same byte-accurate torrent parser.
+async function copyTorrentMagnetToClipboard(torrentLink, button) {
+    if(button.dataset.copyBusy === '1') return;
+    const originalText = button.textContent;
+    const originalTitle = button.title;
+    button.dataset.copyBusy = '1';
+    button.textContent = '…';
+    try {
+        const magnet = await bridgeMagnetFromTorrentLink(torrentLink);
+        GM_setClipboard(magnet, 'text');
+        button.textContent = '✔';
+        button.title = '磁链已复制到剪贴板';
+    } catch (error) {
+        console.error('[EhPikPakAria2] 复制磁链失败：', error);
+        button.textContent = '✕';
+        alert('复制磁链失败：' + (error.message || String(error)));
+    } finally {
+        button.dataset.copyBusy = '0';
+        setTimeout(() => {
+            button.textContent = originalText;
+            button.title = originalTitle;
+        }, 2000);
+    }
+}
+
 function setBridgeButtonText(button, text) {
     if(button.tagName === 'INPUT') button.value = text;
     else button.textContent = text;
@@ -1431,7 +1456,7 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                             torents.map(item => {
 
                                 const button1 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-download-button bt ">🡇</div></td>`;
-                                const button2 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-copy-button icon bt ">✂</div></td>`;
+                                const button2 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-copy-button icon bt" title="复制磁链" aria-label="复制磁链">✂</div></td>`;
                                 const button3 = `<td class="bt-button nowrap"><div data-link="${item.link}" data-gid="${gid}" class="aria2helper-one-click bt-bridge-button bt" title="发送到 PikPak Bridge" aria-label="发送到 PikPak Bridge">P</div></td>`;
                                     const nameHtml = `<td class="bt-name"><a href="${item.link}">${item.name}</a></td>`;
                                     const infoHtml = `<td class="bt-size nowrap"><span class="${achievement(item, 'size')}">${item.size}</span></td>
@@ -1487,16 +1512,11 @@ async function torrentsPopDetail(btButtonBox, gid = GID, token = TOKEN, buttonLe
                                 }
                                 event.target.dataset.loading = false;
                             }
-                            if(event.target.classList.contains("bt-copy-button") || event.target.parentNode.contains("bt-copy-button")) {
-                                const link = event.target.dataset.link;
-                                const magnet = torrentLink2magnet(link);
-                                if (magnet) {
-                                    GM_setClipboard(magnet);
-                                    event.target.innerHTML = "✔";
-                                    setTimeout(() => {
-                                        event.target.innerHTML = "✂";
-                                    }, 2000);
-                                }
+                            const copyButton = event.target.closest && event.target.closest('.bt-copy-button');
+                            if(copyButton && btListBox.contains(copyButton)) {
+                                event.preventDefault();
+                                await copyTorrentMagnetToClipboard(copyButton.dataset.link, copyButton);
+                                return;
                             }
 
                         }
