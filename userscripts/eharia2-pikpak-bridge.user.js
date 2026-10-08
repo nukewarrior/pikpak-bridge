@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.13
+// @version      1.3.14
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -856,6 +856,33 @@ const BRIDGE_TARGET_STYLE = `
 `;
 
 class PikPakBridgeClient {
+    getJSON(path) {
+        return new Promise((resolve, reject) => {
+            GM_xmlhttpRequest({
+                method: 'GET', url: this.baseURL + path, timeout: 12000,
+                onload: response => {
+                    if(response.status !== 200) {
+                        reject(new Error('Bridge 查询失败（HTTP ' + response.status + '）'));
+                        return;
+                    }
+                    try { resolve(JSON.parse(response.responseText || '{}')); }
+                    catch (_) { reject(new Error('Bridge 状态响应不是合法 JSON')); }
+                },
+                onerror: () => reject(new Error('无法连接 Bridge')),
+                ontimeout: () => reject(new Error('Bridge 状态查询超时'))
+            });
+        });
+    }
+    listTasks() {
+        return this.getJSON('/api/v1/tasks?limit=200').then(data =>
+            Array.isArray(data.tasks) ? data.tasks : []);
+    }
+    getTask(id) { return this.getJSON('/api/v1/tasks/' + encodeURIComponent(id)); }
+    getDownloads(id) {
+        return this.getJSON('/api/v1/tasks/' + encodeURIComponent(id) + '/downloads')
+            .then(data => Array.isArray(data.downloads) ? data.downloads : []);
+    }
+
     constructor(baseURL) {
         const raw = String(baseURL || '').trim();
         if(!raw) throw new Error('请先在脚本设置中填写 pikpak-bridge 服务地址');
@@ -1654,6 +1681,208 @@ class SendTaskButton {
     }
 }
 
+
+// Associate each Bridge task with its individual torrent URL, not just a gallery ID.
+const BRIDGE_ACTIVE = new Set([
+    'QUEUED', 'WAITING_PIKPAK_ACCOUNT', 'PIKPAK_SUBMITTING', 'PIKPAK_RUNNING',
+    'PIKPAK_COMPLETE', 'RESOLVING_FILES', 'WAITING_ARIA2', 'ARIA2_DOWNLOADING',
+    'VERIFYING', 'READY_TO_CLEANUP', 'PIKPAK_DELETING', 'CANCELLING'
+]);
+const BRIDGE_FAILED = new Set(['PIKPAK_FAILED', 'ARIA2_FAILED', 'VERIFY_FAILED', 'CLEANUP_FAILED']);
+const BRIDGE_LABELS = {
+    QUEUED:'排队中', WAITING_PIKPAK_ACCOUNT:'等待 PikPak 账号',
+    PIKPAK_SUBMITTING:'提交 PikPak 中', PIKPAK_RUNNING:'PikPak 云下载中',
+    PIKPAK_COMPLETE:'PikPak 离线完成', RESOLVING_FILES:'解析文件中',
+    WAITING_ARIA2:'等待 Aria2', ARIA2_DOWNLOADING:'Aria2 下载中',
+    VERIFYING:'校验中', READY_TO_CLEANUP:'等待清理',
+    PIKPAK_DELETING:'清理 PikPak 中', COMPLETED:'已完成',
+    CANCELLED:'已取消', CANCELLING:'正在取消',
+    PIKPAK_FAILED:'PikPak 失败', ARIA2_FAILED:'Aria2 失败',
+    VERIFY_FAILED:'校验失败', CLEANUP_FAILED:'清理失败'
+};
+function bridgeProgressOf(task, downloads = []) {
+    const status = String(task?.status || '');
+    let percent = null;
+    if(['PIKPAK_SUBMITTING', 'PIKPAK_RUNNING', 'PIKPAK_COMPLETE', 'RESOLVING_FILES'].includes(status)) {
+        const value = Number(task.pikpak_progress);
+        if(Number.isFinite(value) && value >= 0) percent = Math.min(100, value);
+    } else if(['ARIA2_DOWNLOADING', 'VERIFYING', 'READY_TO_CLEANUP', 'PIKPAK_DELETING'].includes(status) &&
+        downloads.length) {
+        const total = downloads.reduce((sum, file) =>
+            sum + Math.max(0, Number(file.total_length || file.expected_size) || 0), 0);
+        const completed = downloads.reduce((sum, file) =>
+            sum + Math.max(0, Number(file.completed_length) || 0), 0);
+        if(total > 0) percent = Math.min(100, completed / total * 100);
+    }
+    if(status === 'COMPLETED') percent = 100;
+    return {
+        label: (BRIDGE_LABELS[status] || '未知状态') +
+            (percent === null ? '' : ' ' + percent.toFixed(0) + '%'),
+        percent, error: String(task?.error || ''),
+        state: BRIDGE_FAILED.has(status) ? 'failed' :
+            status === 'COMPLETED' ? 'completed' : 'active'
+    };
+}
+function bridgeTorrentKey(link) {
+    const raw = String(link || '').trim();
+    try {
+        const url = new URL(raw, window.location.href);
+        return url.protocol === 'magnet:' ? raw : url.href.split('#')[0];
+    } catch (_) { return raw; }
+}
+class BridgeProgressMonitor {
+    constructor() {
+        this.service = '';
+        this.records = [];
+        this.views = [];
+        this.tasks = new Map();
+        this.downloads = new Map();
+        this.timer = 0;
+        this.polling = false;
+        this.refreshAfterPoll = false;
+        this.stopped = false;
+    }
+    prepare() {
+        let service = '';
+        try {
+            if(gmc.get('BRIDGE_URL')) service = new PikPakBridgeClient(gmc.get('BRIDGE_URL')).baseURL;
+        } catch (_) { /* Invalid configuration: leave progress hidden. */ }
+        if(service === this.service) return service;
+        this.stop();
+        this.stopped = false;
+        this.service = service;
+        this.tasks.clear();
+        this.downloads.clear();
+        const saved = service ? GM_getValue(this.storageKey(), []) : [];
+        this.records = Array.isArray(saved) ? saved.filter(r =>
+            r && typeof r.link === 'string' && typeof r.id === 'string' &&
+            r.link && r.id && /^\d+$/.test(String(r.gid || ''))).slice(0, 120) : [];
+        return service;
+    }
+    storageKey() { return 'PIKPAK_BRIDGE_TRACKED_TASKS:' + this.service; }
+    stop() {
+        this.stopped = true;
+        if(this.timer) clearTimeout(this.timer);
+        this.timer = 0;
+    }
+    remember(link, id, gid, fileInfo = null) {
+        if(!this.prepare() || typeof id !== 'string' || !id ||
+            !/^\d+$/.test(String(gid))) return;
+        const key = bridgeTorrentKey(link);
+        this.records = [{
+            link: key, id, gid: String(gid),
+            name: String(fileInfo?.name || '').slice(0, 200), at: Date.now()
+        }, ...this.records.filter(r => r.link !== key)].slice(0, 120);
+        GM_setValue(this.storageKey(), this.records);
+        this.render();
+        this.schedule(0);
+    }
+    watchTorrent(link) { return this.watch('torrent', bridgeTorrentKey(link)); }
+    watchGallery(gid) { return this.watch('gallery', String(gid)); }
+    watch(kind, key) {
+        const element = document.createElement('div');
+        element.className = 'aria2helper-bridge-progress';
+        element.setAttribute('role', 'status');
+        element.setAttribute('aria-live', 'polite');
+        const label = document.createElement('span');
+        label.className = 'aria2helper-bridge-progress-label';
+        const track = document.createElement('div');
+        track.className = 'aria2helper-bridge-progress-track';
+        const fill = document.createElement('span');
+        fill.className = 'aria2helper-bridge-progress-fill';
+        track.appendChild(fill);
+        element.appendChild(label);
+        element.appendChild(track);
+        this.views.push({kind, key, element, label, track, fill});
+        this.prepare();
+        this.render();
+        this.schedule(0);
+        return element;
+    }
+    visibleRecords() {
+        this.views = this.views.filter(v => v.element.isConnected !== false);
+        const links = new Set(this.views.filter(v => v.kind === 'torrent').map(v => v.key));
+        const galleries = new Set(this.views.filter(v => v.kind === 'gallery').map(v => v.key));
+        return this.records.filter(r => links.has(r.link) || galleries.has(r.gid));
+    }
+    render() {
+        for(const view of this.views) {
+            const entries = this.records.filter(r =>
+                view.kind === 'torrent' ? r.link === view.key : r.gid === view.key);
+            view.element.style.display = entries.length && this.service ? 'block' : 'none';
+            if(!entries.length || !this.service) continue;
+            const running = entries.find(r => BRIDGE_ACTIVE.has(this.tasks.get(r.id)?.status));
+            const selected = running || entries[0];
+            const task = this.tasks.get(selected.id);
+            const progress = task ? bridgeProgressOf(task, this.downloads.get(selected.id) || []) : null;
+            view.label.textContent = (view.kind === 'gallery' ? 'PikPak (' + entries.length + '项) · ' : 'PikPak · ') +
+                (progress ? progress.label : '查询任务中…');
+            view.element.dataset.state = progress?.state || 'active';
+            view.element.title = progress?.error ?
+                progress.label + '：' + progress.error : view.label.textContent;
+            view.track.style.display = progress?.percent == null ? 'none' : 'block';
+            view.fill.style.width = progress?.percent == null ? '0%' : progress.percent.toFixed(2) + '%';
+        }
+    }
+    schedule(delay = 5000) {
+        if(this.stopped || !this.service || !this.visibleRecords().length) return;
+        if(this.polling) {
+            this.refreshAfterPoll = this.refreshAfterPoll || delay === 0;
+            return;
+        }
+        if(this.timer) {
+            if(delay !== 0) return;
+            clearTimeout(this.timer);
+        }
+        this.timer = setTimeout(() => {
+            this.timer = 0;
+            this.poll();
+        }, delay);
+    }
+    async poll() {
+        if(this.polling || !this.prepare()) return;
+        const visible = this.visibleRecords();
+        if(!visible.length) return;
+        this.polling = true;
+        let interval = 0;
+        try {
+            const client = new PikPakBridgeClient(this.service);
+            const list = await client.listTasks();
+            const byID = new Map(list.filter(t => t && t.id).map(t => [t.id, t]));
+            const ids = [...new Set(visible.map(r => r.id))];
+            const missing = ids.filter(id => !byID.has(id)).slice(0, 8);
+            for(let i = 0; i < missing.length; i += 4) {
+                await Promise.all(missing.slice(i, i + 4).map(async id => {
+                    try { byID.set(id, await client.getTask(id)); }
+                    catch (_) { /* Preserve the last known state on transient failures. */ }
+                }));
+            }
+            for(const id of ids) if(byID.has(id)) this.tasks.set(id, byID.get(id));
+            const transferring = ids.filter(id =>
+                ['ARIA2_DOWNLOADING', 'VERIFYING', 'READY_TO_CLEANUP', 'PIKPAK_DELETING']
+                    .includes(this.tasks.get(id)?.status)).slice(0, 20);
+            for(let i = 0; i < transferring.length; i += 4) {
+                await Promise.all(transferring.slice(i, i + 4).map(async id => {
+                    try { this.downloads.set(id, await client.getDownloads(id)); }
+                    catch (_) { /* Continue showing the last known transfer data. */ }
+                }));
+            }
+            interval = ids.some(id => BRIDGE_ACTIVE.has(this.tasks.get(id)?.status)) ? 5000 :
+                ids.some(id => !this.tasks.has(id)) ? 15000 : 0;
+        } catch (error) {
+            console.warn('[EhPikPakAria2] 查询 Bridge 下载进度失败', error);
+            interval = 15000;
+        } finally {
+            this.render();
+            this.polling = false;
+            if(this.refreshAfterPoll) {
+                this.refreshAfterPoll = false;
+                this.schedule(0);
+            } else if(interval) this.schedule(interval);
+        }
+    }
+}
+
 class TaskStatus {
     constructor() {
         this.element = document.createElement("div");
@@ -1902,6 +2131,7 @@ const GID = Tool.urlGetGId(window.location.href);
 const TOKEN = Tool.urlGetToken(window.location.href);
 
 let ariaClient;
+const bridgeProgressMonitor = new BridgeProgressMonitor();
 
 console.log({GID, TOKEN});
 
