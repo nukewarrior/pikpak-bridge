@@ -219,6 +219,7 @@ function fakeDocument() {
             tagName: tagName.toUpperCase(),
             children: [],
             dataset: {},
+            classList: {add() {}, remove() {}, contains() {return false;}},
             value: '',
             appendChild(child) { child.parentNode = this; this.children.push(child); },
             remove() {
@@ -413,6 +414,162 @@ test('duplicate and failed submissions must not overwrite the last successful ta
     }
 });
 
+
+test('aria2 directory dialog is required on first use and cancellation is harmless', async () => {
+    const storage=new Map();
+    const {ctx}=createHarness(()=>{},storage);
+    const doc=fakeDocument();ctx.document=doc;
+    const chooser=evaluate(ctx, "chooseAria2Directory('https://aria2.example.test/jsonrpc')");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    assert.equal(dialog['role'],'dialog');
+    const input=dialog.children[2].children[0];
+    assert.equal(input.value,'');
+    assert.equal(dialog.children.length,5,'no history selector on first use');
+    const confirm=dialog.children[4].children[1];
+    confirm.onclick();
+    assert.equal(doc.body.children.length,1,'cannot submit an empty directory');
+    assert.match(dialog.children[3].textContent,/请填写保存目录/);
+    input.value=' /downloads/custom ';
+    confirm.onclick();
+    assert.equal(await chooser,'/downloads/custom');
+    assert.equal(doc.body.children.length,0);
+    assert.equal(doc.listeners.size,0);
+    assert.equal(storage.size,1,'only existing aria2 client identifier may be stored');
+    const cancelled=evaluate(ctx, "chooseAria2Directory('https://aria2.example.test/jsonrpc')");
+    await waitForDialog(doc);
+    const cancelDialog=doc.body.children[0].children[0];
+    cancelDialog.children[4].children[0].onclick();
+    assert.equal(await cancelled,null);
+    assert.equal(doc.body.children.length,0);
+    assert.equal(storage.has('ARIA2_DIR_HISTORY:https://aria2.example.test/jsonrpc'),false);
+});
+
+test('aria2 directory history remembers only successful RPC, most recent first, per endpoint', async () => {
+    const storage=new Map();
+    const {ctx}=createHarness(()=>{},storage);
+    const calls=[];
+    ctx.aria2Mock={
+        rpc:'https://aria2.example.test/jsonrpc',
+        addUri(uri, dir) {
+            calls.push({uri,dir});
+            return Promise.resolve('aria2-gid-'+calls.length);
+        }
+    };
+    evaluate(ctx,'ariaClient = aria2Mock');
+    await evaluate(ctx,"submitToAria2('https://site.test/a.torrent','/downloads/a')");
+    await evaluate(ctx,"submitToAria2('https://site.test/b.torrent','/downloads/b')");
+    await evaluate(ctx,"submitToAria2('https://site.test/c.torrent','/downloads/a')");
+    const dirs=evaluate(ctx,"aria2DirectoryHistory(ariaClient.rpc)");
+    assert.deepEqual(Array.from(dirs),['/downloads/a','/downloads/b']);
+    assert.equal(calls[1].dir,'/downloads/b');
+    ctx.aria2Mock.rpc='https://another-aria2.test/jsonrpc';
+    assert.deepEqual(Array.from(evaluate(ctx,'aria2DirectoryHistory(ariaClient.rpc)')),[]);
+    assert.deepEqual(Array.from(storage.get('ARIA2_DIR_HISTORY:https://aria2.example.test/jsonrpc')),['/downloads/a','/downloads/b']);
+});
+
+test('aria2 directory history is capped at 10, strips blanks and tolerates damaged storage', () => {
+    const storage=new Map([['ARIA2_DIR_HISTORY:test', {not:'an array'}]]);
+    const {ctx}=createHarness(()=>{},storage);
+    assert.deepEqual(Array.from(evaluate(ctx,"aria2DirectoryHistory('test')")),[]);
+    for(let i=0;i<15;i++)evaluate(ctx,"rememberAria2Directory('test','/dir/"+i+"')");
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:test').length,10);
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:test')[0],'/dir/14');
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:test')[9],'/dir/5');
+    evaluate(ctx,"rememberAria2Directory('test','   /dir/9   ')");
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:test')[0],'/dir/9');
+    evaluate(ctx,"rememberAria2Directory('test','   ')");
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:test').length,10);
+});
+
+test('aria2 dialog pre-fills last used directory, offers history and permits a new path', async () => {
+    const storage=new Map([['ARIA2_DIR_HISTORY:rpc1',['/downloads/last','/downloads/old']]]);
+    const {ctx}=createHarness(()=>{},storage);
+    const doc=fakeDocument();ctx.document=doc;
+    const chooser=evaluate(ctx,"chooseAria2Directory('rpc1')");
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    const input=dialog.children[2].children[0];
+    const select=dialog.children[3].children[0];
+    assert.equal(input.value,'/downloads/last');
+    assert.equal(select.children.length,2);
+    assert.equal(select.children[1].textContent,'/downloads/old');
+    select.value='/downloads/old';
+    select.onchange();
+    assert.equal(input.value,'/downloads/old');
+    input.value='/downloads/new';
+    dialog.children[5].children[1].onclick();
+    assert.equal(await chooser,'/downloads/new');
+    assert.deepEqual(storage.get('ARIA2_DIR_HISTORY:rpc1'),['/downloads/last','/downloads/old'], 'choosing without accepted download should not modify history');
+});
+
+test('failed aria2 RPC preserves directory history and does not report success', async () => {
+    const storage=new Map([['ARIA2_DIR_HISTORY:rpc1',['/downloads/last']]]);
+    const {ctx}=createHarness(()=>{},storage);
+    ctx.aria2Mock={rpc:'rpc1',addUri(){return Promise.reject(new Error('remote offline'));}};
+    evaluate(ctx,'ariaClient = aria2Mock');
+    await assert.rejects(evaluate(ctx,"submitToAria2('magnet:?xt=urn:btih:abcdef','/downloads/broken')"),/remote offline/);
+    assert.deepEqual(storage.get('ARIA2_DIR_HISTORY:rpc1'),['/downloads/last']);
+    ctx.aria2Mock.addUri=()=>Promise.resolve(null);
+    await assert.rejects(evaluate(ctx,"submitToAria2('magnet:?xt=urn:btih:abcdef','/downloads/broken')"),/任务 ID/);
+    assert.deepEqual(storage.get('ARIA2_DIR_HISTORY:rpc1'),['/downloads/last']);
+});
+
+test('torrent page aria2 button prompts for directory and preserves cancellation and success behavior', async () => {
+    const {ctx,storage,config}=createHarness(()=>{});
+    config.ARIA2_RPC='https://aria2.example.test/jsonrpc';
+    const doc=fakeDocument();ctx.document=doc;
+    const calls=[];
+    ctx.aria2Mock={rpc:'rpc1',addUri(uri,dir){calls.push({uri,dir});return Promise.resolve('gid-123');}};
+    evaluate(ctx,'ariaClient = aria2Mock');
+    const obj={
+        gid:789,link:'https://e-hentai.org/torrent/789/abc.torrent',
+        showLoading(){this.loading=true;},
+        showMessage(msg){this.message=msg;}
+    };
+    ctx.testObj=obj;
+    const pending=evaluate(ctx,'SendTaskButton.prototype.buttonClick.call(testObj)');
+    await waitForDialog(doc);
+    const dialog=doc.body.children[0].children[0];
+    dialog.children[2].children[0].value='/downloads/torrent';
+    dialog.children[4].children[1].onclick();
+    await pending;
+    assert.equal(calls.length,1);
+    assert.equal(calls[0].dir,'/downloads/torrent');
+    assert.equal(obj.message,'成功');
+    assert.equal(storage.get('ARIA2_DIR_HISTORY:rpc1')[0],'/downloads/torrent');
+    const canceled=evaluate(ctx,'SendTaskButton.prototype.buttonClick.call(testObj)');
+    await waitForDialog(doc);
+    doc.body.children[0].children[0].children[5].children[0].onclick();
+    await canceled;
+    assert.equal(calls.length,1,'no aria2 task should be created when selection is cancelled');
+});
+
+test('archive one-click prompts before requesting archive URL and cancellation costs no request', async () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    ctx.aria2Mock={rpc:'rpc1',addUri(){throw new Error('should not be called');}};
+    evaluate(ctx,'ariaClient = aria2Mock');
+    let requestCount=0;
+    ctx.fetch=()=>{requestCount++;throw new Error('should not fetch');};
+    const btn=evaluate(ctx,"oneClickButton(123,'https://e-hentai.org/g/123/a/',null)");
+    const click=btn.onclick();
+    await waitForDialog(doc);
+    doc.body.children[0].children[0].children[4].children[0].onclick();
+    await click;
+    assert.equal(requestCount,0);
+    assert.equal(btn.textContent,'🡇');
+});
+
+test('aria2 popup download uses interactive directory instead of hidden ARIA2_DIR setting', () => {
+    assert.doesNotMatch(script, /'ARIA2_DIR':\s*\{/);
+    assert.doesNotMatch(script, /gmc\.get\('ARIA2_DIR'\)/);
+    assert.match(script,/const ariaButton = event\.target\.closest && event\.target\.closest\('\.bt-download-button'\)/);
+    assert.match(script,/await chooseAria2Directory\(ariaClient\.rpc\)/);
+    assert.match(script,/const taskId = await submitToAria2\(getTorrentLink\(link\), dir\)/);
+    assert.match(script,/const taskId = await submitToAria2\(downloadLink, dir\)/);
+});
+
 test('scissors copies SHA-1 of real torrent info bytes and never submits to Bridge', async () => {
     const sample = exampleTorrent();
     const {ctx, requests, clipboard, delayedUpdates, alerts} = createHarness(req =>
@@ -482,7 +639,7 @@ test('repeated scissors clicks while download is pending do not trigger multiple
 test('torrent page and popup preserve aria2 and add separate Bridge entries', () => {
     assert.match(script, /this\.bridgeButton\.onclick = \(\) => sendTorrentToBridge\(this\.link, this\.bridgeButton\)/);
     assert.match(script, /const bridgeButton = event\.target\.closest/);
-    assert.match(script, /ariaClient\.addUri\(getTorrentLink\(link\), gmc\.get\('ARIA2_DIR'\)\)/);
+    assert.match(script, /submitToAria2\(getTorrentLink\(link\), dir\)/);
     assert.match(script, /class="aria2helper-one-click bt-bridge-button bt"/);
     assert.match(script, /@connect\s+\*/);
     assert.match(script, /event\.target\.closest\('.bt-copy-button'\)/);

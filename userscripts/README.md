@@ -10,7 +10,7 @@
 4. 在脚本管理器菜单中打开“设置”，填写：
    - **Bridge 地址**：例如 `http://192.168.1.10:8080`；不要附加 `/api/v1/tasks`。
    - **无需填写下载目标 ID**。每次点击发送时，脚本通过 `GET /api/v1/targets` 实时读取 Bridge 中已启用的下载目标；只有一个目标就直接提交，多个目标会弹出选择框。
-   - **Aria2 RPC/密钥/保存路径**：需要保留直接 aria2 下载时填写；只使用 PikPak Bridge 时 RPC 可以留空。
+   - **Aria2 RPC / 密钥**：需要直接使用 aria2 下载时填写；保存目录无需在设置页填写，实际点击下载按钮时选择。只使用 PikPak Bridge 时 RPC 可以留空。
 5. 在 Gallery 种子下载页点击“发送到 PikPak”；或在种子快捷弹窗点击青色的 **P** 按钮。原来的 aria2 和复制磁链按钮仍然保留。
 
 > 已配置的 pikpak-bridge 服务需能从当前浏览器所在设备访问，且已完成首次初始化并配置至少一个下载目标。脚本只会发送**磁链**，不会把 .torrent 二进制文件传给后端。
@@ -28,6 +28,14 @@
 - 第一版**不在 E-Hentai 页面显示 PikPak/aria2 桥接进度**；可在 pikpak-bridge Web UI 中查看任务。原脚本的 aria2 进度显示不变。
 - 存档直链（`hath.network/archive`）**仍只发送至原 aria2**，不走 PikPak Bridge。
 
+### aria2 保存目录的选择与记忆
+
+- 所有直接 aria2 下载入口（种子下载页、种子快捷弹窗、列表/详情页一键下载存档、存档下载页）都会在提交任务前弹出「选择 aria2 保存位置」。
+- **第一次需要手动填写 aria2 服务器上的保存目录**（如 `/downloads`）；不能留空。点击「取消」不会发起 aria2 提交，存档一键下载也不会请求付费存档链接。
+- 目录选择窗口会显示最近使用过的路径供选择，同时允许直接编辑或填写新路径。再次打开时默认填入**上一次成功提交到 aria2 时使用的路径**。
+- 只有 aria2 RPC 确认接受任务并返回 GID，才把该目录保存到用户脚本管理器的 `GM_setValue` 本地存储；取消或 RPC 失败不改变记录。
+- 每个 aria2 RPC 地址独立保存最多 **10 条**最近使用目录，重复目录自动前移；不会上传到 PikPak Bridge。
+
 ## 网络权限和安全
 
 新增 `@connect *`，以便用户配置局域网 IP、Tailscale 地址或自定义 HTTPS 域名；部分脚本管理器会弹出跨域权限提示。请**只安装可信的本仓库脚本**，并确认填写的是自己的桥接服务地址。
@@ -37,7 +45,7 @@
 ## 来源和授权
 
 - 原始作者：xioxin、SchneeHertz；原始项目：[EhTagTranslation/UserScripts](https://github.com/EhTagTranslation/UserScripts)
-- 上游版本：EhAria2 v1.2；本地修改版：v1.3.4
+- 上游版本：EhAria2 v1.2；本地修改版：v1.3.5
 - 衍生脚本保留原作者署名并依照 **GNU GPL v3** 分发，许可证全文见 [LICENSE](LICENSE)。此许可声明针对本目录派生的用户脚本，不改变 `pikpak-bridge` 其他独立代码的授权。
 - 后续可通过脚本头部的 `@updateURL` / `@downloadURL` 从本仓库同步更新。
 
