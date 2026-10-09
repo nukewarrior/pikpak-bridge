@@ -166,8 +166,9 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 		INSERT INTO tasks (
 			id, source, source_type, source_key, name,
 			target_id, target_name, aria2_instance_id, download_dir, status,
+            pikpak_account_id, pikpak_root_file_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		task.ID,
 		task.Source,
@@ -179,6 +180,8 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 		task.Aria2InstanceID,
 		task.DownloadDir,
 		string(task.Status),
+        task.PikPakAccountID,
+        task.PikPakRootFileID,
 		task.CreatedAt.UTC().Format(time.RFC3339Nano),
 		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)

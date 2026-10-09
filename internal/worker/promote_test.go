@@ -67,6 +67,7 @@ func TestCacheCleanerEvictsOnlyCompletedTask(t *testing.T) {
  defer db.Close()
  task.PikPakAccountID="account-a"
  task.PikPakRootFileID="first"
+ if err:=db.SaveTask(context.Background(),&task,"","");err!=nil {t.Fatal(err)}
  if err:=db.RecordRetainedCache(context.Background(),&task,10);err!=nil {t.Fatal(err)}
  entry,err:=db.ClaimOldestCache(context.Background(),"account-a")
  if err!=nil {t.Fatal(err)}
