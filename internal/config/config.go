@@ -225,6 +225,9 @@ func Validate(cfg *Config) error {
 		if strings.TrimSpace(target.Aria2InstanceID) == "" || strings.TrimSpace(target.Dir) == "" {
 			return fmt.Errorf("targets[%d] requires aria2_instance and dir", i)
 		}
+        if target.LocalDir!="" && !filepath.IsAbs(target.LocalDir) {
+            return fmt.Errorf("targets[%d].local_dir must be an absolute path inside Bridge container",i)
+        }
 		if _, exists := instanceIDs[target.Aria2InstanceID]; !exists {
 			return fmt.Errorf("targets[%d] references unknown aria2 instance %q", i, target.Aria2InstanceID)
 		}

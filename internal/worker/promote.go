@@ -154,11 +154,14 @@ func restorePromotion(base,stage,backups string,plan []promotionFile) error {
 }
 
 func durableMarker(path string,data []byte) error {
-    f,err:=os.OpenFile(path,os.O_CREATE|os.O_WRONLY|os.O_TRUNC,0600)
+    tmp:=path+".tmp"
+    f,err:=os.OpenFile(tmp,os.O_CREATE|os.O_WRONLY|os.O_TRUNC,0600)
     if err!=nil {return err}
-    if _,err=f.Write(data);err!=nil {f.Close();return err}
-    if err=f.Sync();err!=nil {f.Close();return err}
-    return f.Close()
+    if _,err=f.Write(data);err!=nil {f.Close();_ = os.Remove(tmp);return err}
+    if err=f.Sync();err!=nil {f.Close();_ = os.Remove(tmp);return err}
+    if err=f.Close();err!=nil {_ = os.Remove(tmp);return err}
+    if err=os.Rename(tmp,path);err!=nil {_ = os.Remove(tmp);return err}
+    return nil
 }
 
 func safePath(base,target string) error {

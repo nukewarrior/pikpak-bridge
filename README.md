@@ -241,3 +241,17 @@ An in-flight PikPak submission is recorded before ordinary state transitions res
 Automatic cleanup only deletes the exact PikPak root/file IDs recorded for a bridge task.
 
 PikPak deletion runs only after aria2 reports completion and configured verification succeeds.
+
+
+## 历史任务、云端缓存保留与重新下载
+
+- 任务经 aria2 和尺寸校验成功后，PikPak 云端根文件暂时保留，不再按固定延迟自动删除。独立的 `pikpak_cache_entries` 数据表保存源链接、账号和根文件引用，因此即使历史记录被删除，仍可以安全回收。
+- 当某 PikPak 账号剩余空间低于 `pikpak.min_free_space`（默认 2GB），或 PikPak 明确报空间不足时，单独的回收器仅删除**该账号**最早完成并校验成功、且没有运行中任务引用的根文件；每次删除后重新查询空间，达到阈值即停止。离线下载次数耗尽不会触发空间清理。
+- `cleanup.enabled: false` 可禁用自动空间回收；`cleanup.permanent: true` 代表空间回收会永久删除确切属于 Bridge 的根文件。旧版的 `cleanup.delay` 保留以兼容已有配置，但不再决定下载完成后立即清理的时间。
+- 历史记录可删除、失败任务可重试，完成/取消任务可重新下载。删除历史仅移除 Bridge 记录，不删除 NAS 文件；仍有未清理远端资源的失败任务先转为可恢复清理流程，清理成功后自动删除历史。
+- 相同磁力的正常提交仍返回 HTTP 409，并告知旧任务状态；只有明确携带 `force: true` 的请求才能在没有同源活动任务时创建新的下载尝试。新尝试优先复用同源已保留的 PikPak 云端缓存，缓存失效时重新走离线下载。
+- **安全覆盖重下需要 NAS 挂载。** 下载目标的 `local_dir` 必须是 Bridge 容器中可访问的路径，与该目标的 aria2 `dir` 指向同一 NAS 文件目录。示例：aria2 的 `dir=/downloads/movies`，而 Bridge 的 `local_dir=/nas/downloads/movies`，容器需挂载 `/mnt/user/downloads/movies:/nas/downloads/movies`。下载首先写入 `dir/.pikpak-bridge-staging/{taskID}`；校验所有暂存文件后，逐个备份旧文件并重命名替换。多文件不是一个跨文件原子操作，但会用持久化恢复日志在中断时恢复未提交的替换，直到确认完成后才清理备份。
+- 未设置本地挂载时，正常首次下载不受影响，但**明确重下会被拒绝**，避免不经校验就覆盖 NAS 旧文件。
+- E-Hentai 用户脚本的 PikPak 按钮会在重复已完成种子时提示，确认后创建新的下载任务。原始直接 aria2 操作仍使用其原有流程，**不具备 Bridge 提供的暂存后替换保证**。对 NAS 文件安全有要求时，重复下载请选择 PikPak Bridge。
+
+请先备份 `/data/pikpak-bridge.db` 与 `/data/config.yaml` 再升级。历史记录里原本已永久清理的云端文件无法恢复，也不会被误记为留存缓存。

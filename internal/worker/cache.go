@@ -41,11 +41,17 @@ type CacheCleaner struct {
     accounts []string
     minFree int64
     pressure *CachePressure
+    enabled bool
 }
-func NewCacheCleaner(db cacheStore, p pikpak.Provider, accounts []string, minFree int64, pressure *CachePressure) *CacheCleaner {
-    return &CacheCleaner{store:db,provider:p,accounts:accounts,minFree:minFree,pressure:pressure}
+func NewCacheCleaner(db cacheStore, p pikpak.Provider, accounts []string, minFree int64, pressure *CachePressure, enabled bool) *CacheCleaner {
+    return &CacheCleaner{store:db,provider:p,accounts:accounts,minFree:minFree,pressure:pressure,enabled:enabled}
 }
 func (w *CacheCleaner) Run(ctx context.Context) {
+    if !w.enabled {
+        slog.Info("PikPak 自动空间回收已禁用")
+        <-ctx.Done()
+        return
+    }
     slog.Info("PikPak 空间自动回收器已启动", "min_free_space", w.minFree)
     ticker:=time.NewTicker(30*time.Second)
     defer ticker.Stop()

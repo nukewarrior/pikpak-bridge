@@ -384,7 +384,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			LocalDirs: localDirs,
 		}),
 		canceller: worker.NewCanceller(db, provider, backend, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
-        cacheCleaner: worker.NewCacheCleaner(db, provider, accountIDs, minFreeSpace, cachePressure),
+        cacheCleaner: worker.NewCacheCleaner(db, provider, accountIDs, minFreeSpace, cachePressure, cfg.Cleanup.Enabled),
 	}, nil
 }
 
