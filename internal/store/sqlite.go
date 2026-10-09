@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -18,6 +19,7 @@ var ErrDuplicate = errors.New("duplicate task")
 
 type SQLite struct {
 	db *sql.DB
+	sourceMu sync.Mutex // serialize source creation and cache reclamation
 }
 
 func Open(path string) (*SQLite, error) {
@@ -123,6 +125,20 @@ func (s *SQLite) init(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_task_id ON downloads(task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status, next_attempt_at);`,
+		`CREATE TABLE IF NOT EXISTS pikpak_cache_entries (
+            account_id TEXT NOT NULL,
+            root_file_id TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            cached_at TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'RETAINED',
+            last_error TEXT NOT NULL DEFAULT '',
+            retry_at TEXT,
+            PRIMARY KEY (account_id, root_file_id)
+        );`,
+        `CREATE INDEX IF NOT EXISTS idx_pikpak_cache_source ON pikpak_cache_entries(source_key, state);`,
+        `CREATE INDEX IF NOT EXISTS idx_pikpak_cache_eviction ON pikpak_cache_entries(account_id, state, cached_at);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -174,10 +190,9 @@ func (s *SQLite) GetTask(ctx context.Context, id string) (domain.Task, error) {
 }
 
 func (s *SQLite) GetTaskBySourceKey(ctx context.Context, sourceKey string) (domain.Task, error) {
-	return scan(s.db.QueryRowContext(ctx,
-		"SELECT "+taskColumns+" FROM tasks WHERE source_key = ?",
-		sourceKey,
-	))
+    return scan(s.db.QueryRowContext(ctx,
+        "SELECT "+taskColumns+" FROM tasks WHERE source_key = ? OR substr(source_key, 1, length(?)+1) = ? || '#' ORDER BY created_at DESC, id DESC LIMIT 1",
+        sourceKey, sourceKey, sourceKey))
 }
 
 func (s *SQLite) ListTasks(ctx context.Context, limit int) ([]domain.Task, error) {
