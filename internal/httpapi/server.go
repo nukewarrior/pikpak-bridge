@@ -427,17 +427,25 @@ func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
 	previousStatus := task.Status
 	switch task.Status {
 	case domain.TaskPikPakFailed:
-		if err := s.store.ClearTransferState(r.Context(), task.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "reset PikPak transfer state")
-			return
-		}
-		task.PikPakAccountID = ""
-		task.PikPakTaskID = ""
-		task.PikPakRootFileID = ""
-		task.PikPakPhase = ""
-		task.PikPakProgress = 0
-		task.PikPakLastActivityAt = nil
-		task.Status = domain.TaskWaitingPikPakAccount
+        if task.PikPakRootFileID!="" && task.PikPakAccountID!="" {
+            // Reuse the already owned PikPak root rather than orphaning it.
+            task.Status=domain.TaskPikPakComplete
+        } else if task.PikPakTaskID!="" {
+            writeError(w,http.StatusConflict,"旧 PikPak 离线任务仍有远端 ID，根文件尚未确认；请先通过删除历史记录安全清理远端资源，再重新提交")
+            return
+        } else {
+            if err:=s.store.ClearTransferState(r.Context(),task.ID);err!=nil {
+                writeError(w,http.StatusInternalServerError,"reset PikPak transfer state")
+                return
+            }
+            task.PikPakAccountID=""
+            task.PikPakTaskID=""
+            task.PikPakRootFileID=""
+            task.PikPakPhase=""
+            task.PikPakProgress=0
+            task.PikPakLastActivityAt=nil
+            task.Status=domain.TaskWaitingPikPakAccount
+        }
 	case domain.TaskAria2Failed:
 		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, false); err != nil {
 			writeError(w, http.StatusInternalServerError, "reset aria2 downloads")

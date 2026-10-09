@@ -986,6 +986,28 @@ class PikPakBridgeClient {
         });
     }
 
+    retryTask(id) {
+        return new Promise((resolve,reject)=>{
+            GM_xmlhttpRequest({
+                method:'POST',
+                url:this.baseURL+'/api/v1/tasks/'+encodeURIComponent(id)+'/retry',
+                timeout:15000,
+                onload:response=>{
+                    let body;
+                    try {body=JSON.parse(response.responseText||'{}');}
+                    catch (_) {reject(new Error('Bridge 重试响应不是合法 JSON'));return;}
+                    if(response.status===200 && body.id) {
+                        resolve({id:body.id,status:body.status,duplicate:false});
+                    } else {
+                        reject(new Error('重试失败（HTTP '+response.status+'）：'+(body.error||'请求失败')));
+                    }
+                },
+                onerror:()=>reject(new Error('无法连接 Bridge')),
+                ontimeout:()=>reject(new Error('Bridge 重试请求超时'))
+            });
+        });
+    }
+
     addTask(magnet, target = '', force = false) {
         const body = {url: magnet};
         if(force) body.force = true;
@@ -1650,9 +1672,9 @@ async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
             bridgeProgressMonitor.remember(torrentLink, task.id, button.dataset.gid || GID, fileInfo);
             return;
         } else if(task.duplicate && BRIDGE_FAILED.has(task.status)) {
-            const proceed = window.confirm('该种子的旧任务已经失败。确定创建新的下载任务吗？');
+            const proceed = window.confirm('该种子的旧任务失败。确定重试原任务吗？系统会优先复用原有云端资源。');
             if(!proceed) {setBridgeButtonText(button, '已取消');return;}
-            task = await client.addTask(magnet, selected.id, true);
+            task = await client.retryTask(task.id);
         }
         if(!task.duplicate) {
             GM_setValue(bridgeLastTargetStorageKey(client.baseURL), selected.id);
