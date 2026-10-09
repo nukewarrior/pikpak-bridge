@@ -1321,25 +1321,67 @@ test('Bridge reports separate cloud and aria2 phase progress without mislabeling
     assert.equal(p.label,'已完成 100%');
 });
 
-test('expanded gallery places Bridge status in content cell instead of positioned metadata', () => {
+test('expanded gallery status fits between native category and date without shifting their indices', () => {
     const {ctx}=createHarness(()=>{});
     const doc=fakeDocument();ctx.document=doc;
     evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
-    const metadata=doc.createElement('td');
-    const content=doc.createElement('td');
-    ctx.expanded={querySelector(selector) {return selector === '.gl4e' ? content : null;}};
+    const metadata=doc.createElement('div');
+    metadata.classList.add('gl3e');
+    metadata.getBoundingClientRect=()=>({top:0,left:0,width:125});
+    const category=doc.createElement('div');
+    category.getBoundingClientRect=()=>({top:10,bottom:45,left:9,width:110});
+    const date=doc.createElement('div');
+    let dateTop=63;
+    date.getBoundingClientRect=()=>({top:dateTop,bottom:dateTop+20,left:9,width:110});
+    const rating=doc.createElement('div');
+    metadata.appendChild(category);
+    metadata.appendChild(date);
+    metadata.appendChild(rating);
+    const content=doc.createElement('div');
+    ctx.expanded={querySelector(selector) {
+        return selector === '.gl3e' ? metadata : selector === '.gl4e' ? content : null;
+    }};
     ctx.metadata=metadata;
     evaluate(ctx,'appendBridgeGalleryStatus(expanded,123,metadata)');
-    assert.equal(content.children.length,1);
-    assert.equal(content.children[0].className,'aria2helper-bridge-progress');
-    assert.equal(metadata.children.length,0,'fixed-position gallery metadata must remain untouched');
+    const badge=metadata.children[3];
+    assert.equal(metadata.children[0],category,'category retains the first native child');
+    assert.equal(metadata.children[1],date,'timestamp retains the second native child');
+    assert.equal(metadata.children[2],rating);
+    assert.equal(metadata.style.position,'relative');
+    assert.equal(content.children.length,0,'badge stays out of title/tag content');
+    assert.equal(badge.classList.contains('aria2helper-bridge-progress-meta'),true);
+    assert.equal(badge.style.top,'46px');
+    assert.equal(badge.style.left,'9px');
+    assert.equal(badge.style.width,'110px');
+    assert.equal(badge.style.height,'16px');
+    assert.equal(badge.dataset.dense,'true');
+    assert.equal(badge.dataset.noTrack,'false');
+
+    ctx.link='https://e-hentai.org/torrent/123/progress.torrent';
+    evaluate(ctx,"bridgeProgressMonitor.remember(link,'task-meta',123)");
+    evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-meta',{status:'PIKPAK_RUNNING',pikpak_progress:65})");
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'block');
+    assert.match(badge.children[0].textContent,/PikPak · 云下载中 65%/);
+    assert.equal(badge.children[1].style.display,'block');
+    assert.equal(badge.children[1].children[0].style.width,'65.00%');
+
+    // A tiny category/date gap must never paint over the native timestamp.
+    dateTop=57;
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'none');
+    dateTop=66;
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'block');
+    assert.equal(badge.style.height,'19px');
 
     const fallback=doc.createElement('td');
     ctx.compact={querySelector() {return null;}};
     ctx.fallback=fallback;
     evaluate(ctx,'appendBridgeGalleryStatus(compact,124,fallback)');
     assert.equal(fallback.children.length,1,'other list layouts keep their status entry');
-    assert.match(script,/\.gl4e > \.aria2helper-bridge-progress \{[\s\S]*?clear: both;/);
+    assert.match(script,/window\.addEventListener\('resize'/);
+    assert.match(script,/\.gl3e > \.aria2helper-bridge-progress-meta \{/);
 });
 
 test('completed Bridge gallery status uses a compact badge and hides the completed progress track', () => {
