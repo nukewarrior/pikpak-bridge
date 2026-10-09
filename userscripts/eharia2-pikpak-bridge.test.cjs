@@ -1329,14 +1329,29 @@ test('expanded gallery status fits between native category and date without shif
     metadata.classList.add('gl3e');
     metadata.getBoundingClientRect=()=>({top:0,left:0,width:125});
     const category=doc.createElement('div');
+    category.classList.add('cs');
     category.getBoundingClientRect=()=>({top:10,bottom:45,left:9,width:110});
     const date=doc.createElement('div');
+    date.id='posted_123';
     let dateTop=63;
     date.getBoundingClientRect=()=>({top:dateTop,bottom:dateTop+20,left:9,width:110});
+    // Real pages can nest category/date inside wrappers, so the first two
+    // direct children do not necessarily correspond to these visual elements.
+    const categoryWrapper=doc.createElement('div');
+    categoryWrapper.getBoundingClientRect=()=>({top:0,bottom:200,left:0,width:125});
+    categoryWrapper.appendChild(category);
+    const dateWrapper=doc.createElement('div');
+    dateWrapper.getBoundingClientRect=()=>({top:0,bottom:190,left:0,width:125});
+    dateWrapper.appendChild(date);
     const rating=doc.createElement('div');
-    metadata.appendChild(category);
-    metadata.appendChild(date);
+    metadata.appendChild(categoryWrapper);
+    metadata.appendChild(dateWrapper);
     metadata.appendChild(rating);
+    metadata.querySelector=selector=>{
+        if(selector==='.cs, .cn') return category;
+        if(selector==='[id^="posted_"], [id^="posted"]') return date;
+        return null;
+    };
     const content=doc.createElement('div');
     ctx.expanded={querySelector(selector) {
         return selector === '.gl3e' ? metadata : selector === '.gl4e' ? content : null;
@@ -1344,8 +1359,10 @@ test('expanded gallery status fits between native category and date without shif
     ctx.metadata=metadata;
     evaluate(ctx,'appendBridgeGalleryStatus(expanded,123,metadata)');
     const badge=metadata.children[3];
-    assert.equal(metadata.children[0],category,'category retains the first native child');
-    assert.equal(metadata.children[1],date,'timestamp retains the second native child');
+    assert.equal(metadata.children[0],categoryWrapper,'native category wrapper stays in place');
+    assert.equal(metadata.children[1],dateWrapper,'native date wrapper stays in place');
+    assert.equal(metadata.children[0].children[0],category,'nested category is untouched');
+    assert.equal(metadata.children[1].children[0],date,'nested date is untouched');
     assert.equal(metadata.children[2],rating);
     assert.equal(metadata.style.position,'relative');
     assert.equal(content.children.length,0,'badge stays out of title/tag content');
@@ -1380,6 +1397,17 @@ test('expanded gallery status fits between native category and date without shif
     ctx.fallback=fallback;
     evaluate(ctx,'appendBridgeGalleryStatus(compact,124,fallback)');
     assert.equal(fallback.children.length,1,'other list layouts keep their status entry');
+    const unknownMeta=doc.createElement('div');
+    unknownMeta.classList.add('gl3e');
+    unknownMeta.querySelector=()=>null;
+    const safeContent=doc.createElement('div');
+    ctx.unknown={querySelector(selector) {
+        return selector === '.gl3e' ? unknownMeta :
+            selector === '.gl4e' ? safeContent : null;
+    }};
+    evaluate(ctx,'appendBridgeGalleryStatus(unknown,125,unknownMeta)');
+    assert.equal(unknownMeta.children.length,0,'unknown metadata must not get a flowing badge');
+    assert.equal(safeContent.children.length,1,'unknown layout uses a safe content fallback');
     assert.match(script,/window\.addEventListener\('resize'/);
     assert.match(script,/\.gl3e > \.aria2helper-bridge-progress-meta \{/);
 });
