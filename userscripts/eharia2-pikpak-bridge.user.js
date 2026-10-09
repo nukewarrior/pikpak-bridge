@@ -1659,7 +1659,7 @@ async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
         if(task.duplicate && ['COMPLETED','CANCELLED'].includes(task.status)) {
             const proceed = window.confirm('这个种子之前已经下载过（' +
                 (task.status === 'COMPLETED' ? '已完成' : '已取消') +
-                '）。\n确定重新下载吗？Bridge 会先下载到临时目录，校验成功后替换 NAS 原文件。');
+                '）。\n确定重新下载吗？Bridge 会直接通过 aria2 下载并覆盖同名 NAS 文件；下载失败可能导致原文件不完整。');
             if(!proceed) {
                 setBridgeButtonText(button, '已取消');
                 return;

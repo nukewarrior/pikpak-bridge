@@ -6,7 +6,5 @@ services:
       - "${PIKPAK_BRIDGE_PORT:-8080}:8080"
     volumes:
       - ${PIKPAK_BRIDGE_DATA:-./data}:/data
-      # 如需安全地重新下载并替换 NAS 文件，请挂载 aria2 下载目录对应的宿主机路径：
-      # - /mnt/user/downloads:/nas/downloads
     environment:
       TZ: ${TZ:-Asia/Shanghai}

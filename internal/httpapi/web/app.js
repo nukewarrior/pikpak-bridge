@@ -566,11 +566,6 @@ function openResourceDialog(kind, id="") {
           <label>下载目录</label>
           <input data-field="dir" value="${esc(existing?.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
         </div>
-        <div class="field">
-          <label>Bridge 本地挂载目录（安全重新下载必填）</label>
-          <input data-field="local_dir" value="${esc(existing?.local_dir || "")}" placeholder="/nas/downloads/pikpak">
-          <small>该目录必须映射到 aria2 下载目录对应的同一 NAS 位置；未配置时禁止覆盖式重下。</small>
-        </div>
       </div>
       <div class="modal-field-grid two">
         <div class="field">
@@ -629,7 +624,6 @@ function readResourceForm() {
     name: value("name").trim(),
     aria2_instance: value("aria2_instance"),
     dir: value("dir").trim(),
-    local_dir: value("local_dir").trim(),
     default: checked("default"),
     enabled: checked("enabled")
   };
@@ -645,7 +639,7 @@ function payloadFromConfigState() {
       id:x.id, name:x.name, url:x.url, secret:x.secret || "", enabled:x.enabled !== false
     })),
     targets: configState.targets.map(x => ({
-      id:x.id, name:x.name, aria2_instance:x.aria2_instance, dir:x.dir, local_dir:x.local_dir || "",
+      id:x.id, name:x.name, aria2_instance:x.aria2_instance, dir:x.dir,
       default:Boolean(x.default), enabled:x.enabled !== false
     }))
   };
@@ -947,7 +941,7 @@ async function historyTaskAction(id, action, button) {
   const prompts = {
     delete: "确定删除这条历史记录吗？NAS 文件与 PikPak 云端缓存不会因此删除。",
     retry: "确定重试失败任务吗？",
-    redownload: "该作品曾经下载过。确认重新下载吗？成功校验后将替换 NAS 原文件。"
+    redownload: "该作品之前已经下载过。确定让 aria2 重新下载并直接覆盖同名文件吗？若下载失败，旧文件可能不完整。"
   };
   if(!window.confirm(prompts[action])) return;
   button.disabled = true;
@@ -1036,7 +1030,7 @@ async function openTask(id) {
       </dl>
       ${canRedownload ? `
         <div class="task-retry-panel">
-          <div><strong>重新下载</strong><span>会先下载到临时位置，校验成功后替换原文件。需配置 NAS 本地挂载目录。</span></div>
+          <div><strong>重新下载</strong><span>直接推送 aria2 下载至原目录；若存在同名文件会直接覆盖，失败可能损坏原文件。</span></div>
           <button id="redownloadTaskBtn" class="primary-btn compact" type="button">重新下载</button>
         </div>` : ""}
       ${canDelete ? `

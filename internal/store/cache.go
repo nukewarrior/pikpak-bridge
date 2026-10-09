@@ -65,14 +65,14 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
         if existing.ID!="" { return &existing,nil }
         if known!=nil {
             // A user can delete history while retaining cloud cache metadata.
-            // Still require explicit confirmation before replacing NAS files.
+            // Still require explicit confirmation before aria2 overwrites NAS files.
             return &domain.Task{ID:known.TaskID,Status:domain.TaskCompleted,
                 Name:"已删除的下载历史（仍保留缓存记录）"},nil
         }
         task.SourceKey=base
     } else {
-        // An explicit repeat always takes the private staging path, including
-        // when history was already deleted but its cache record still exists.
+        // Each confirmed repeat gets its own task ID. aria2 writes directly
+        // to the selected destination and handles overwriting there.
         task.SourceKey=base+"#"+task.ID
     }
     if strings.Contains(task.SourceKey, "#") {

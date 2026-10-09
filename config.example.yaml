@@ -38,7 +38,6 @@ targets:
     name: 电影
     aria2_instance: unraid
     dir: /downloads/movies
-    # local_dir: /nas/downloads/movies  # 对应宿主 NAS 挂载，用于校验后安全替换
     default: true
   - id: tv
     name: 电视剧

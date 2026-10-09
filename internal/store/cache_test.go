@@ -85,7 +85,6 @@ func TestHistoryDeletedStillRequiresConfirmationAndReusesCache(t *testing.T) {
     if err!=nil {t.Fatal(err)}
     defer db.Close()
     old:=cacheTestTask("old","DDDD")
-    old.LocalDir="/nas/pikpak"
     if err:=db.CreateTask(ctx,old);err!=nil {t.Fatal(err)}
     old.Status=domain.TaskCompleted
     old.PikPakAccountID="acc1"; old.PikPakRootFileID="cached-root"
@@ -100,7 +99,6 @@ func TestHistoryDeletedStillRequiresConfirmationAndReusesCache(t *testing.T) {
     }
 
     again:=cacheTestTask("again","DDDD")
-    again.LocalDir="/nas/pikpak"
     duplicate,err:=db.CreateTaskFromSource(ctx,&again,true)
     if err!=nil || duplicate!=nil {t.Fatalf("force repeat: %+v %v",duplicate,err)}
     if again.Status!=domain.TaskPikPakComplete || again.PikPakRootFileID!="cached-root" {
@@ -108,5 +106,5 @@ func TestHistoryDeletedStillRequiresConfirmationAndReusesCache(t *testing.T) {
     }
     if again.SourceKey=="btih:DDDD" {t.Fatal("repeat without history must stage safely")}
     got,err:=db.GetTask(ctx,again.ID)
-    if err!=nil || got.LocalDir!="/nas/pikpak" {t.Fatalf("local NAS mount not snapshotted: %+v %v",got,err)}
+    if err!=nil || got.DownloadDir!="/downloads" {t.Fatalf("download dir changed: %+v %v",got,err)}
 }
