@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.17
+// @version      1.3.18
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -2300,8 +2300,10 @@ const bridgeProgressMonitor = new BridgeProgressMonitor();
 function positionBridgeMetaProgress(badge) {
     const meta = badge.parentNode;
     if(!meta || !meta.classList?.contains('gl3e')) return;
-    const category = meta.children[0];
-    const date = meta.children[1];
+    // Select the actual category/date, not arbitrary direct children. E-Hentai
+    // wraps these elements differently between themes and listing variants.
+    const category = meta.querySelector?.('.cs, .cn');
+    const date = meta.querySelector?.('[id^="posted_"], [id^="posted"]');
     if(!category || !date || typeof category.getBoundingClientRect !== 'function' ||
         typeof date.getBoundingClientRect !== 'function') {
         badge.style.display = 'none';
@@ -2312,7 +2314,7 @@ function positionBridgeMetaProgress(badge) {
     const metaRect = meta.getBoundingClientRect();
     const gap = dateRect.top - categoryRect.bottom;
     const height = Math.min(20, Math.floor(gap - 2));
-    const left = categoryRect.left - metaRect.left;
+    const left = Math.max(0, categoryRect.left - metaRect.left);
     const width = Math.min(categoryRect.width, metaRect.width - left - 3);
     // Fail closed instead of painting across the category or date at unusual zoom levels.
     if(!Number.isFinite(gap) || height < 13 || width < 75) {
@@ -2330,7 +2332,7 @@ function positionBridgeMetaProgress(badge) {
 function appendBridgeGalleryStatus(row, gid, fallbackHost) {
     const meta = row.querySelector('.gl3e');
     const badge = bridgeProgressMonitor.watchGallery(gid);
-    if(meta && meta.children.length >= 2) {
+    if(meta && meta.querySelector?.('.cs, .cn') && meta.querySelector?.('[id^="posted_"], [id^="posted"]')) {
         badge.classList.add('aria2helper-bridge-progress-meta');
         const position = typeof window.getComputedStyle === 'function' ?
             window.getComputedStyle(meta).position : meta.style.position;
@@ -2338,6 +2340,11 @@ function appendBridgeGalleryStatus(row, gid, fallbackHost) {
         // Append last: no change to category/date/native child indices.
         meta.appendChild(badge);
         positionBridgeMetaProgress(badge);
+        // Recheck after the browser's first layout. A synchronous measurement
+        // can still be zero while an infinite-scroll row is being attached.
+        if(typeof window.requestAnimationFrame === 'function') {
+            window.requestAnimationFrame(() => positionBridgeMetaProgress(badge));
+        }
     } else fallbackHost.appendChild(badge);
 }
 if(typeof window.addEventListener === 'function') {
