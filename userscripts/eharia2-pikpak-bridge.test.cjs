@@ -1334,7 +1334,10 @@ test('expanded gallery status fits between native category and date without shif
     const date=doc.createElement('div');
     date.id='posted_123';
     let dateTop=63;
-    date.getBoundingClientRect=()=>({top:dateTop,bottom:dateTop+20,left:9,width:110});
+    date.getBoundingClientRect=()=>{
+        const top=dateTop+(metadata.classList.contains('aria2helper-bridge-meta-active') ? 15 : 0);
+        return {top,bottom:top+20,left:9,width:110};
+    };
     // Real pages can nest category/date inside wrappers, so the first two
     // direct children do not necessarily correspond to these visual elements.
     const categoryWrapper=doc.createElement('div');
@@ -1384,7 +1387,7 @@ test('expanded gallery status fits between native category and date without shif
     assert.equal(badge.children[1].children[0].style.width,'65.00%');
 
     // A tiny category/date gap must never paint over the native timestamp.
-    dateTop=57;
+    dateTop=43;
     evaluate(ctx,'bridgeProgressMonitor.render()');
     assert.equal(badge.style.display,'none');
     // The next animation frame can measure the layout even when no further
@@ -1393,7 +1396,7 @@ test('expanded gallery status fits between native category and date without shif
     ctx.testBadge=badge;
     evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
     assert.equal(badge.style.display,'block');
-    assert.equal(badge.style.height,'19px');
+    assert.equal(badge.style.height,'20px');
     evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-meta',{status:'COMPLETED'})");
     evaluate(ctx,'bridgeProgressMonitor.render()');
     assert.equal(badge.style.display,'inline-block');
@@ -1425,7 +1428,7 @@ test('expanded gallery status fits between native category and date without shif
 });
 
 
-test('real extended-list 13px gap becomes readable only for tracked rows and restores on removal', () => {
+test('real extended-list status preserves category height and shifts metadata only for tracked rows', () => {
     const {ctx}=createHarness(()=>{});
     const doc=fakeDocument();ctx.document=doc;
     evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
@@ -1437,12 +1440,15 @@ test('real extended-list 13px gap becomes readable only for tracked rows and res
     let ready=true;
     let categoryWidth=110;
     category.getBoundingClientRect=()=>({
-        top:423, bottom:ready ? 423+(metadata.classList.contains('aria2helper-bridge-meta-active') ? 24 : 35) : 0,
+        top:423, bottom:ready ? 458 : 0,
         left:435, width:ready ? categoryWidth : 0
     });
     const date=doc.createElement('div');
     date.id='posted_123';
-    date.getBoundingClientRect=()=>({top:ready ? 471 : 0,bottom:491,left:434,width:114});
+    date.getBoundingClientRect=()=>{
+        const shift=metadata.classList.contains('aria2helper-bridge-meta-active') ? 15 : 0;
+        return {top:ready ? 471+shift : 0,bottom:491+shift,left:434,width:114};
+    };
     metadata.appendChild(category);
     metadata.appendChild(date);
     for(let i=0;i<4;i++) metadata.appendChild(doc.createElement('div'));
@@ -1469,7 +1475,11 @@ test('real extended-list 13px gap becomes readable only for tracked rows and res
         assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),true);
         assert.equal(badge.dataset.state,visibleState);
         assert.notEqual(badge.style.display,'none',status);
-        assert.equal(badge.style.top,'34px');
+        assert.equal(badge.style.top,'47px');
+        assert.equal(category.getBoundingClientRect().bottom-category.getBoundingClientRect().top,35);
+        assert.equal(date.getBoundingClientRect().top,486);
+        assert.equal(415+parseFloat(badge.style.top)-category.getBoundingClientRect().bottom,4);
+        assert.equal(date.getBoundingClientRect().top-(415+parseFloat(badge.style.top)+20),4);
         assert.equal(badge.style.height,'20px');
         assert.equal(badge.style.width,'110px');
         const badgeTop=415+parseFloat(badge.style.top);
@@ -1500,7 +1510,8 @@ test('real extended-list 13px gap becomes readable only for tracked rows and res
     evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
     assert.equal(badge.style.display,'none','a later measurement cannot reveal an untracked badge');
     assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),false);
-    assert.match(script,/\.gl3e\.aria2helper-bridge-meta-active \.cn,\s*\.gl3e\.aria2helper-bridge-meta-active \.cs \{\s*height: 24px;\s*line-height: 24px;/);
+    assert.match(script,/\.gl3e\.aria2helper-bridge-meta-active \{\s*min-height: 190px;/);
+    assert.match(script,/\.gl3e\.aria2helper-bridge-meta-active > div:nth-child\(n\+2\):not\(\.aria2helper-bridge-progress\) \{\s*translate: 0 15px;/);
 });
 
 test('completed Bridge gallery status uses a compact badge and hides the completed progress track', () => {

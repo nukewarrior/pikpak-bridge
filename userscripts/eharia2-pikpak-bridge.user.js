@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.19
+// @version      1.3.20
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -391,11 +391,12 @@ const STYLE = `
     white-space: normal;
     text-align: left;
 }
-/* A tracked row needs room for a readable badge above the native date. */
-.gl3e.aria2helper-bridge-meta-active .cn,
-.gl3e.aria2helper-bridge-meta-active .cs {
-    height: 24px;
-    line-height: 24px;
+/* Keep the native category size and move the remaining metadata down for the badge. */
+.gl3e.aria2helper-bridge-meta-active {
+    min-height: 190px;
+}
+.gl3e.aria2helper-bridge-meta-active > div:nth-child(n+2):not(.aria2helper-bridge-progress) {
+    translate: 0 15px;
 }
 /* Extended list: the badge occupies only the measured gap between category and date.
  * It is appended after the native children so their nth-child selectors keep working. */
