@@ -12,8 +12,8 @@ import (
 )
 
 type promotionFile struct {
-    Relative string \`json:"relative"\`
-    HadOld bool \`json:"had_old"\`
+    Relative string `json:"relative"`
+    HadOld bool `json:"had_old"`
 }
 
 // PromoteLocalDownloads promotes a repeat transfer after every staging file
