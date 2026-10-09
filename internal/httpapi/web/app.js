@@ -655,7 +655,7 @@ async function persistConfigState() {
   appConfigured = true;
   configState = normalizeConfigData(await request("/api/v1/config"));
   renderResourcePage(currentConfigView);
-  await Promise.all([loadHealth(), loadTargets(), loadTasks()]);
+  await Promise.all([loadHealth(), loadTargets(), loadTasks(), loadQuotaSummary()]);
   if (currentConfigView === "accounts" || currentConfigView === "aria2") {
     await refreshResourceStatus(false);
   }
@@ -1132,12 +1132,92 @@ async function openTask(id) {
   }
 }
 
+
+let quotaSummaryRequestBusy = false;
+let lastQuotaSummary = null;
+
+function quotaUpdateTime(value) {
+  if (!value) return "尚未更新";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "尚未更新";
+  return "更新于 " + d.toLocaleTimeString("zh-CN", {hour:"2-digit", minute:"2-digit", hour12:false});
+}
+
+function renderQuotaSummary(data) {
+  lastQuotaSummary = data;
+  const count = Number(data.counted_accounts || 0);
+  const enabled = Number(data.enabled_accounts || 0);
+  const number = $("quotaRemaining");
+  let label = "";
+  let placeholder = false;
+  if (enabled === 0) {
+    label = "未配置账号";
+    placeholder = true;
+  } else if (count > 0) {
+    label = String(data.remaining) + " 次";
+  } else if (Number(data.stale_accounts || 0) > 0) {
+    label = "上次剩余 " + data.stale_remaining + " 次";
+    placeholder = true;
+  } else {
+    label = data.refreshing ? "获取中…" : "暂无法获取";
+    placeholder = true;
+  }
+  number.textContent = label;
+  number.classList.toggle("is-placeholder", placeholder);
+  let note = "";
+  if (enabled > 0 && !data.complete) {
+    if (count > 0) note = "部分账号未统计";
+    else if (!data.refreshing) note = "额度不可用";
+  }
+  $("quotaStatus").textContent = note;
+  $("quotaStatus").classList.toggle("is-warning", Boolean(note));
+  $("quotaUpdated").textContent = quotaUpdateTime(data.updated_at);
+  $("quotaRefreshBtn").disabled = Boolean(data.refreshing);
+  $("quotaRefreshBtn").classList.toggle("is-loading", Boolean(data.refreshing));
+}
+
+async function loadQuotaSummary() {
+  if (quotaSummaryRequestBusy) return;
+  if (!appConfigured) {
+    renderQuotaSummary({enabled_accounts:0, counted_accounts:0, refreshing:false});
+    return;
+  }
+  quotaSummaryRequestBusy = true;
+  try {
+    renderQuotaSummary(await request("/api/v1/pikpak/quota-summary"));
+  } catch (_) {
+    $("quotaStatus").textContent = "连接异常";
+    $("quotaStatus").classList.add("is-warning");
+    if (!lastQuotaSummary) {
+      $("quotaRemaining").textContent = "暂无法获取";
+      $("quotaRemaining").classList.add("is-placeholder");
+    }
+  } finally {
+    quotaSummaryRequestBusy = false;
+  }
+}
+
+async function requestQuotaRefresh() {
+  const button = $("quotaRefreshBtn");
+  button.disabled = true;
+  button.classList.add("is-loading");
+  try {
+    renderQuotaSummary(await request("/api/v1/pikpak/quota-summary/refresh", {method:"POST"}));
+  } catch (err) {
+    toast("额度刷新失败：" + err.message, true);
+    button.disabled = false;
+    button.classList.remove("is-loading");
+  }
+}
+
 function startDashboard() {
   if (dashboardStarted) return;
   dashboardStarted = true;
   loadHealth();
   loadTargets();
   loadTasks();
+  loadQuotaSummary();
+  setInterval(loadQuotaSummary, 5000);
   setInterval(loadHealth, 15000);
   setInterval(loadTargets, 60000);
   setInterval(loadTasks, 3000);
@@ -1175,6 +1255,7 @@ $("settingsCancelBtn").addEventListener("click", showHome);
 $("addAccountBtn").addEventListener("click", () => openResourceDialog("account"));
 $("addAria2Btn").addEventListener("click", () => openResourceDialog("aria2"));
 $("addTargetBtn").addEventListener("click", () => openResourceDialog("target"));
+$("quotaRefreshBtn").addEventListener("click", requestQuotaRefresh);
 $("checkAccountsBtn").addEventListener("click", () => refreshResourceStatus(true));
 $("checkAria2Btn").addEventListener("click", () => refreshResourceStatus(true));
 
@@ -1234,7 +1315,7 @@ $("targetSelect").addEventListener("change", event => {
 
 $("refreshBtn").addEventListener("click", async () => {
   $("refreshBtn").disabled = true;
-  const jobs = [loadHealth(), loadTargets(), loadTasks()];
+  const jobs = [loadHealth(), loadTargets(), loadTasks(), loadQuotaSummary()];
   if (!$("historyView").classList.contains("hidden")) jobs.push(loadHistoryTasks());
   await Promise.all(jobs);
   $("refreshBtn").disabled = false;

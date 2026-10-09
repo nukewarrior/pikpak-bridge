@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nukewarrior/pikpak-bridge/internal/app"
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
 	"github.com/nukewarrior/pikpak-bridge/internal/config"
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -25,6 +26,8 @@ type fakeRuntime struct {
 	cancelledPikPak  []string
 	deletedPikPak    []string
 	cancelledAria2   []string
+	quota            app.QuotaSummary
+	quotaRefreshes   int
 }
 
 func (f *fakeRuntime) Configured() bool { return f.configured }
@@ -56,6 +59,8 @@ func (f *fakeRuntime) ApplyConfig(_ context.Context, cfg *config.Config) error {
 }
 
 func (f *fakeRuntime) AccountIDs() []string { return nil }
+func (f *fakeRuntime) QuotaSummary() app.QuotaSummary { return f.quota }
+func (f *fakeRuntime) RefreshQuota() { f.quotaRefreshes++ }
 
 func (f *fakeRuntime) RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error) {
 	return pikpak.AccountSnapshot{}, nil
@@ -612,4 +617,39 @@ func TestRetryFailedPikPakWithoutRootBlocksUnsafeReset(t *testing.T) {
     if response.Code!=http.StatusConflict {t.Fatalf("expected safe rejection: %d %s",response.Code,response.Body.String())}
     got,err:=db.GetTask(context.Background(),task.ID)
     if err!=nil || got.PikPakTaskID!="unresolved-task" {t.Fatalf("remote reference discarded: %+v %v",got,err)}
+}
+
+func TestQuotaSummaryEndpoints(t *testing.T) {
+	db := openTestStore(t)
+	runtime := &fakeRuntime{
+		configured: true,
+		quota: app.QuotaSummary{
+			Remaining: 34, EnabledAccounts: 2, CountedAccounts: 2, Complete: true,
+		},
+	}
+	handler := New(db, WithRuntime(runtime)).Handler()
+	for _, tc := range []struct {
+		method string
+		path string
+		status int
+	}{
+		{http.MethodGet, "/api/v1/pikpak/quota-summary", http.StatusOK},
+		{http.MethodPost, "/api/v1/pikpak/quota-summary/refresh", http.StatusAccepted},
+	} {
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, httptest.NewRequest(tc.method, tc.path, nil))
+		if result.Code != tc.status {
+			t.Fatalf("%s %s: got status %d: %s", tc.method, tc.path, result.Code, result.Body.String())
+		}
+		var summary app.QuotaSummary
+		if err := json.Unmarshal(result.Body.Bytes(), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if summary.Remaining != 34 || !summary.Complete {
+			t.Fatalf("unexpected response: %+v", summary)
+		}
+	}
+	if runtime.quotaRefreshes != 1 {
+		t.Fatalf("expected one refresh request, got %d", runtime.quotaRefreshes)
+	}
 }

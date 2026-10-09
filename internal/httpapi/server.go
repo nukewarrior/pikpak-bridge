@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nukewarrior/pikpak-bridge/internal/app"
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
 	"github.com/nukewarrior/pikpak-bridge/internal/config"
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -44,6 +45,8 @@ type runtimeManager interface {
 	ApplyConfig(context.Context, *config.Config) error
 	AccountIDs() []string
 	RefreshAccount(context.Context, string) (pikpak.AccountSnapshot, error)
+	QuotaSummary() app.QuotaSummary
+	RefreshQuota()
 	CancelPikPakOffline(context.Context, string, string) error
 	DeletePikPakFile(context.Context, string, string) error
 	CancelAria2(context.Context, string, string) error
@@ -84,6 +87,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/setup", s.setupStatus)
 	s.mux.HandleFunc("POST /api/v1/setup", s.completeSetup)
 	s.mux.HandleFunc("GET /api/v1/status", s.runtimeStatus)
+	s.mux.HandleFunc("GET /api/v1/pikpak/quota-summary", s.quotaSummary)
+	s.mux.HandleFunc("POST /api/v1/pikpak/quota-summary/refresh", s.refreshQuota)
 	s.mux.HandleFunc("GET /api/v1/config", s.getConfig)
 	s.mux.HandleFunc("PUT /api/v1/config", s.updateConfig)
 	s.mux.HandleFunc("GET /api/v1/targets", s.listTargets)
@@ -98,6 +103,23 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.deleteHistoryTask)
 	s.mux.HandleFunc("POST /api/v1/tasks/{id}/cancel", s.cancelTask)
 	s.registerWebUI()
+}
+
+func (s *Server) quotaSummary(w http.ResponseWriter, _ *http.Request) {
+	if s.runtime == nil || !s.runtime.Configured() {
+		writeJSON(w, http.StatusOK, app.QuotaSummary{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.runtime.QuotaSummary())
+}
+
+func (s *Server) refreshQuota(w http.ResponseWriter, _ *http.Request) {
+	if s.runtime == nil || !s.runtime.Configured() {
+		writeError(w, http.StatusConflict, "PikPak runtime is not configured")
+		return
+	}
+	s.runtime.RefreshQuota()
+	writeJSON(w, http.StatusAccepted, s.runtime.QuotaSummary())
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

@@ -266,3 +266,15 @@ PikPak deletion runs only after aria2 reports completion and configured verifica
 - 继续遵守目标 aria2 的全局并发设置。上述 32 是 Bridge 允许排队/下载的数量，不代表同时开始 32 个 HTTP 下载。
 - 首次下载和确认重下仍沿用原来的目录、文件名、覆盖行为与 `remote-time=false`，重启后通过确定性 GID 恢复。**本优化不修改 SQLite 表结构，不需要重建数据库**。
 
+
+
+## 首页云下载剩余额度
+
+首页在任务输入框下方展示所有**已启用** PikPak 账号的剩余云下载次数合计，不展示单账号列表。额度查询由服务端异步完成，首页每 5 秒只读取一次本地内存汇总：
+
+- `GET /api/v1/pikpak/quota-summary`：读取内存中的额度合计，不触发 PikPak 请求。
+- `POST /api/v1/pikpak/quota-summary/refresh`：请求后台重新查询额度，返回 HTTP 202。
+- 启动时及每 5 分钟进行全量刷新，同时最多查询 3 个账号。
+- 新离线任务确实被 PikPak 接受、远端 ID 已记录后，仅对使用的账号在约 2 秒和 12 秒时校准额度；复用已保存的云端文件不会假设消耗新额度。
+- 查询失败的账号不计入新鲜合计，另以 `complete=false` 和统计账号数说明数据不完整。成功查到的旧值可用于显示“上次剩余”，但绝不作为实时额度。
+- 停用账号不计入统计，热重载配置会重建缓存。缓存不写入 SQLite，**无需重建数据库**。

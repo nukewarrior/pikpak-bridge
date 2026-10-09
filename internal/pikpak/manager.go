@@ -46,6 +46,33 @@ func NewManager(accounts []config.PikPakAccount, sessionDir string) *Manager {
 	return m
 }
 
+// CloudDownloadQuota reads just the quota endpoint without enumerating offline tasks.
+// It shares the account authentication lock with the worker.
+func (m *Manager) CloudDownloadQuota(ctx context.Context, accountID string) (int64, int64, error) {
+	entry, err := m.get(accountID)
+	if err != nil {
+		return 0, 0, err
+	}
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if !entry.enabled {
+		return 0, 0, fmt.Errorf("pikpak account %q is disabled", accountID)
+	}
+	if err := entry.client.Login(ctx); err != nil {
+		return 0, 0, err
+	}
+	q, err := entry.client.Quota(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	total := int64(q.Quotas.CloudDownload.Limit)
+	remaining := total - int64(q.Quotas.CloudDownload.Usage)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, total, nil
+}
+
 func (m *Manager) RefreshAccount(ctx context.Context, accountID string) (AccountSnapshot, error) {
 	entry, err := m.get(accountID)
 	if err != nil {

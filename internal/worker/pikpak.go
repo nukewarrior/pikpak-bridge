@@ -30,6 +30,7 @@ type Options struct {
 	AccountIDs              []string
 	WorkerInterval          time.Duration
 	QuotaRefresh            time.Duration
+	QuotaSubmitted          func(string)
 	StatusInterval          time.Duration
 	StallTimeout            time.Duration
 	RetryInterval           time.Duration
@@ -125,6 +126,11 @@ func (w *Worker) runOnceLogged(ctx context.Context) {
 	if err := w.RunOnce(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("PikPak 工作循环执行失败", "error", err)
 	}
+}
+
+// SetQuotaSubmittedCallback must be called before the worker starts.
+func (w *Worker) SetQuotaSubmittedCallback(callback func(string)) {
+	w.options.QuotaSubmitted = callback
 }
 
 func (w *Worker) RunOnce(ctx context.Context) error {
@@ -409,6 +415,9 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 
 	if err := w.store.RecordPikPakSubmission(ctx, task.ID, task.PikPakAccountID, remote.ID, remote.RootFileID); err != nil { return fmt.Errorf("persist accepted PikPak submission: %w", err) }
 	w.noteSubmitSuccess(task.PikPakAccountID, remote.Status == pikpak.PhasePending || remote.Status == pikpak.PhaseRunning)
+	if w.options.QuotaSubmitted != nil {
+		w.options.QuotaSubmitted(task.PikPakAccountID)
+	}
 	slog.Info("PikPak 离线下载提交成功",
 		"task_id", task.ID,
 		"account_id", task.PikPakAccountID,

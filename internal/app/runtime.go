@@ -28,6 +28,7 @@ type Runtime struct {
 	configured bool
 	cfg        *config.Config
 	provider   *pikpak.Manager
+	quota      *QuotaMonitor
 	registry   *aria2.Registry
 	cancel     context.CancelFunc
 	workersWG  *sync.WaitGroup
@@ -162,6 +163,26 @@ func (r *Runtime) RefreshAccount(ctx context.Context, id string) (pikpak.Account
 	return provider.RefreshAccount(ctx, id)
 }
 
+// QuotaSummary reads local cached values without remote I/O.
+func (r *Runtime) QuotaSummary() QuotaSummary {
+	r.mu.RLock()
+	quota := r.quota
+	r.mu.RUnlock()
+	if quota == nil {
+		return QuotaSummary{}
+	}
+	return quota.Summary()
+}
+
+func (r *Runtime) RefreshQuota() {
+	r.mu.RLock()
+	quota := r.quota
+	r.mu.RUnlock()
+	if quota != nil {
+		quota.RequestRefresh()
+	}
+}
+
 func (r *Runtime) Aria2Snapshots(ctx context.Context) []aria2.InstanceSnapshot {
 	r.mu.RLock()
 	registry := r.registry
@@ -261,17 +282,24 @@ func (r *Runtime) prepare(cfg *config.Config) (*pikpak.Manager, *aria2.Registry,
 func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, registry *aria2.Registry, workers workerSet) {
 	workerCtx, cancel := context.WithCancel(r.parent)
 	wg := &sync.WaitGroup{}
-	wg.Add(5)
+	wg.Add(6)
 
 	r.cancel = cancel
 	r.workersWG = wg
 	r.provider = provider
+	quota := NewQuotaMonitor(provider, cfg.PikPak.Accounts)
+	r.quota = quota
+	workers.pikpak.SetQuotaSubmittedCallback(quota.Submitted)
 	r.registry = registry
 	r.cfg = cloneConfig(cfg)
 
 	go func() {
 		defer wg.Done()
 		workers.pikpak.Run(workerCtx)
+	}()
+	go func() {
+		defer wg.Done()
+		quota.Run(workerCtx)
 	}()
 	go func() {
 		defer wg.Done()
