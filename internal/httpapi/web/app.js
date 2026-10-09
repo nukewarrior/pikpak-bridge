@@ -566,6 +566,11 @@ function openResourceDialog(kind, id="") {
           <label>下载目录</label>
           <input data-field="dir" value="${esc(existing?.dir || "/downloads/pikpak")}" placeholder="/downloads/pikpak" required>
         </div>
+        <div class="field">
+          <label>Bridge 本地挂载目录（安全重新下载必填）</label>
+          <input data-field="local_dir" value="${esc(existing?.local_dir || "")}" placeholder="/nas/downloads/pikpak">
+          <small>该目录必须映射到 aria2 下载目录对应的同一 NAS 位置；未配置时禁止覆盖式重下。</small>
+        </div>
       </div>
       <div class="modal-field-grid two">
         <div class="field">
@@ -624,6 +629,7 @@ function readResourceForm() {
     name: value("name").trim(),
     aria2_instance: value("aria2_instance"),
     dir: value("dir").trim(),
+    local_dir: value("local_dir").trim(),
     default: checked("default"),
     enabled: checked("enabled")
   };
@@ -639,7 +645,7 @@ function payloadFromConfigState() {
       id:x.id, name:x.name, url:x.url, secret:x.secret || "", enabled:x.enabled !== false
     })),
     targets: configState.targets.map(x => ({
-      id:x.id, name:x.name, aria2_instance:x.aria2_instance, dir:x.dir,
+      id:x.id, name:x.name, aria2_instance:x.aria2_instance, dir:x.dir, local_dir:x.local_dir || "",
       default:Boolean(x.default), enabled:x.enabled !== false
     }))
   };

@@ -64,6 +64,7 @@ type DownloadTarget struct {
 	Name            string `yaml:"name" json:"name"`
 	Aria2InstanceID string `yaml:"aria2_instance" json:"aria2_instance"`
 	Dir             string `yaml:"dir" json:"dir"`
+	LocalDir        string `yaml:"local_dir,omitempty" json:"local_dir,omitempty"`
 	Default         bool   `yaml:"default,omitempty" json:"default,omitempty"`
 	Enabled         *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 }

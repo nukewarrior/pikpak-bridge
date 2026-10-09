@@ -37,6 +37,7 @@ type configTargetView struct {
 	Name            string `json:"name"`
 	Aria2InstanceID string `json:"aria2_instance"`
 	Dir             string `json:"dir"`
+	LocalDir        string `json:"local_dir"`
 	Default         bool   `json:"default"`
 	Enabled         bool   `json:"enabled"`
 }
@@ -131,6 +132,7 @@ func configView(cfg *config.Config) configResponse {
 			Name:            target.Name,
 			Aria2InstanceID: target.Aria2InstanceID,
 			Dir:             target.Dir,
+            LocalDir:        target.LocalDir,
 			Default:         target.Default,
 			Enabled:         config.Enabled(target.Enabled),
 		})
@@ -204,6 +206,7 @@ func mergeManagedConfig(current *config.Config, req setupRequest) *config.Config
 			Name:            strings.TrimSpace(item.Name),
 			Aria2InstanceID: strings.TrimSpace(item.Aria2InstanceID),
 			Dir:             strings.TrimSpace(item.Dir),
+            LocalDir:        strings.TrimSpace(item.LocalDir),
 			Default:         item.Default,
 			Enabled:         mergeEnabled(item.Enabled, old.Enabled, exists),
 		})
