@@ -1409,7 +1409,7 @@ test('expanded gallery status fits between native category and date without shif
     ctx.fallback=fallback;
     evaluate(ctx,'appendBridgeGalleryStatus(compact,124,fallback)');
     assert.equal(fallback.children.length,1,'other list layouts keep their status entry');
-    const unknownMeta=doc.createElement('div');
+    const unknownMeta=doc.createElement('div');ctx.unknownMeta=unknownMeta;
     unknownMeta.classList.add('gl3e');
     unknownMeta.querySelector=()=>null;
     const safeContent=doc.createElement('div');
@@ -1422,6 +1422,85 @@ test('expanded gallery status fits between native category and date without shif
     assert.equal(safeContent.children.length,1,'unknown layout uses a safe content fallback');
     assert.match(script,/window\.addEventListener\('resize'/);
     assert.match(script,/\.gl3e > \.aria2helper-bridge-progress-meta \{/);
+});
+
+
+test('real extended-list 13px gap becomes readable only for tracked rows and restores on removal', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    const metadata=doc.createElement('div');
+    metadata.classList.add('gl3e');
+    metadata.getBoundingClientRect=()=>({top:415,left:429,width:124});
+    const category=doc.createElement('div');
+    category.classList.add('cn');
+    let ready=true;
+    let categoryWidth=110;
+    category.getBoundingClientRect=()=>({
+        top:423, bottom:ready ? 423+(metadata.classList.contains('aria2helper-bridge-meta-active') ? 24 : 35) : 0,
+        left:435, width:ready ? categoryWidth : 0
+    });
+    const date=doc.createElement('div');
+    date.id='posted_123';
+    date.getBoundingClientRect=()=>({top:ready ? 471 : 0,bottom:491,left:434,width:114});
+    metadata.appendChild(category);
+    metadata.appendChild(date);
+    for(let i=0;i<4;i++) metadata.appendChild(doc.createElement('div'));
+    const nativeChildren=metadata.children.slice();
+    metadata.querySelector=selector=>
+        selector==='.cs, .cn' ? category :
+        selector==='[id^="posted_"], [id^="posted"]' ? date : null;
+    ctx.expanded={querySelector:selector=>selector==='.gl3e' ? metadata : null};
+    ctx.metadata=metadata;
+    evaluate(ctx,'appendBridgeGalleryStatus(expanded,123,metadata)');
+    const badge=metadata.children[6];
+    ctx.testBadge=badge;
+    assert.equal(date.getBoundingClientRect().top-category.getBoundingClientRect().bottom,13);
+    assert.equal(badge.style.display,'none');
+    assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),false);
+
+    evaluate(ctx,"bridgeProgressMonitor.remember('https://e-hentai.org/torrent/123/progress.torrent','task-real',123)");
+    for(const [status,visibleState] of [
+        ['PIKPAK_RUNNING','active'], ['ARIA2_DOWNLOADING','active'],
+        ['PIKPAK_FAILED','failed'], ['COMPLETED','completed']
+    ]) {
+        ctx.task={status,pikpak_progress:65,error:status==='PIKPAK_FAILED' ? 'failed' : ''};
+        evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-real',task);bridgeProgressMonitor.render()");
+        assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),true);
+        assert.equal(badge.dataset.state,visibleState);
+        assert.notEqual(badge.style.display,'none',status);
+        assert.equal(badge.style.top,'34px');
+        assert.equal(badge.style.height,'20px');
+        assert.equal(badge.style.width,'110px');
+        const badgeTop=415+parseFloat(badge.style.top);
+        assert.ok(badgeTop>=category.getBoundingClientRect().bottom);
+        assert.ok(badgeTop+parseFloat(badge.style.height)<=date.getBoundingClientRect().top);
+        assert.deepEqual(metadata.children.slice(0,6),nativeChildren);
+        if(status==='PIKPAK_RUNNING') {
+            assert.match(badge.children[0].textContent,/65%/);
+            assert.equal(badge.children[1].style.display,'block');
+        }
+        if(status==='COMPLETED') assert.equal(badge.children[1].style.display,'none');
+    }
+
+    ready=false;
+    evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
+    assert.equal(badge.style.display,'none','unmeasurable anchors remain hidden');
+    ready=true;
+    evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
+    assert.equal(badge.style.display,'inline-block','next valid measurement restores completed status');
+    categoryWidth=90;
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.width,'90px','resized anchors are measured again');
+
+    evaluate(ctx,'bridgeProgressMonitor.records=[];bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'none');
+    assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),false);
+    assert.equal(date.getBoundingClientRect().top-category.getBoundingClientRect().bottom,13);
+    evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
+    assert.equal(badge.style.display,'none','a later measurement cannot reveal an untracked badge');
+    assert.equal(metadata.classList.contains('aria2helper-bridge-meta-active'),false);
+    assert.match(script,/\.gl3e\.aria2helper-bridge-meta-active \.cn,\s*\.gl3e\.aria2helper-bridge-meta-active \.cs \{\s*height: 24px;\s*line-height: 24px;/);
 });
 
 test('completed Bridge gallery status uses a compact badge and hides the completed progress track', () => {

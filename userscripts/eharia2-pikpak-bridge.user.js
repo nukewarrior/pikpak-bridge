@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.18
+// @version      1.3.19
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -390,6 +390,12 @@ const STYLE = `
     padding: 3px 5px;
     white-space: normal;
     text-align: left;
+}
+/* A tracked row needs room for a readable badge above the native date. */
+.gl3e.aria2helper-bridge-meta-active .cn,
+.gl3e.aria2helper-bridge-meta-active .cs {
+    height: 24px;
+    line-height: 24px;
 }
 /* Extended list: the badge occupies only the measured gap between category and date.
  * It is appended after the native children so their nth-child selectors keep working. */
@@ -1952,6 +1958,9 @@ class BridgeProgressMonitor {
             if(!entries.length || !this.service) {
                 view.element.style.display = 'none';
                 delete view.element.dataset.state;
+                if(view.element.classList.contains('aria2helper-bridge-progress-meta')) {
+                    positionBridgeMetaProgress(view.element);
+                }
                 continue;
             }
             const running = entries.find(r => BRIDGE_ACTIVE.has(this.tasks.get(r.id)?.status));
@@ -2301,6 +2310,8 @@ const bridgeProgressMonitor = new BridgeProgressMonitor();
 function positionBridgeMetaProgress(badge) {
     const meta = badge.parentNode;
     if(!meta || !meta.classList?.contains('gl3e')) return;
+    if(badge.dataset.state) meta.classList.add('aria2helper-bridge-meta-active');
+    else meta.classList.remove('aria2helper-bridge-meta-active');
     // Select the actual category/date, not arbitrary direct children. E-Hentai
     // wraps these elements differently between themes and listing variants.
     const category = meta.querySelector?.('.cs, .cn');
