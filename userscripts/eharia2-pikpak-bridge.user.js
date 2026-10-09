@@ -424,6 +424,9 @@ const STYLE = `
     margin: 0;
 }
 .gl3e > .aria2helper-bridge-progress-meta[data-dense="true"] .aria2helper-bridge-progress-track {
+    height: 1px;
+}
+.gl3e > .aria2helper-bridge-progress-meta[data-no-track="true"] .aria2helper-bridge-progress-track {
     display: none !important;
 }
 .gl3e > .aria2helper-bridge-progress-meta[data-state="failed"] {
@@ -2322,6 +2325,7 @@ function positionBridgeMetaProgress(badge) {
     badge.style.height = height + 'px';
     badge.style.lineHeight = Math.min(14, height - 2) + 'px';
     badge.dataset.dense = height < 18 ? 'true' : 'false';
+    badge.dataset.noTrack = height < 15 ? 'true' : 'false';
 }
 function appendBridgeGalleryStatus(row, gid, fallbackHost) {
     const meta = row.querySelector('.gl3e');
