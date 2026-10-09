@@ -375,7 +375,14 @@ const STYLE = `
     border-radius: inherit;
 }
 .aria2helper-bridge-progress[data-state="failed"] { border-color: #bf625e; }
-.aria2helper-bridge-progress[data-state="completed"] .aria2helper-bridge-progress-fill { background: #548f30; }
+.aria2helper-bridge-progress[data-state="completed"] {
+    padding: 3px 7px;
+    border-color: rgba(84, 143, 48, 0.45);
+    background: rgba(84, 143, 48, 0.1);
+}
+.aria2helper-bridge-progress[data-state="completed"] .aria2helper-bridge-progress-track {
+    display: none !important;
+}
 #torrentinfo .aria2helper-bridge-progress { width: 232px; margin: 7px auto 3px; }
 #btList .bt-actions-cell .aria2helper-bridge-progress {
     max-width: 160px;
@@ -384,7 +391,16 @@ const STYLE = `
     white-space: normal;
     text-align: left;
 }
-.gl3e .aria2helper-bridge-progress { width: 112px; margin: 4px; }
+/* Extended-list metadata (.gl3e) uses positioned children; render in the content cell instead. */
+.gl4e > .aria2helper-bridge-progress {
+    position: static;
+    float: none;
+    clear: both;
+    width: fit-content;
+    max-width: calc(100% - 8px);
+    margin: 8px 4px 4px;
+    vertical-align: top;
+}
 .glname .aria2helper-bridge-progress { margin: 4px 0; }
 `;
 
@@ -1902,20 +1918,28 @@ class BridgeProgressMonitor {
         for(const view of this.views) {
             const entries = this.records.filter(r =>
                 view.kind === 'torrent' ? r.link === view.key : r.gid === view.key);
-            view.element.style.display = entries.length && this.service ? 'block' : 'none';
-            if(!entries.length || !this.service) continue;
+            if(!entries.length || !this.service) {
+                view.element.style.display = 'none';
+                continue;
+            }
             const running = entries.find(r => BRIDGE_ACTIVE.has(this.tasks.get(r.id)?.status));
             const selected = running || entries[0];
             const task = this.tasks.get(selected.id);
             const progress = task ? bridgeProgressOf(task, this.downloads.get(selected.id) || []) : null;
-            const errorHint = progress?.error ?
+            const isCompleted = progress?.state === 'completed';
+            // Gallery cells can be narrow, so show errors there in the tooltip instead of the inline label.
+            const errorHint = progress?.error && view.kind === 'torrent' ?
                 ' · ' + progress.error.slice(0, 48) + (progress.error.length > 48 ? '…' : '') : '';
-            view.label.textContent = (view.kind === 'gallery' ? 'PikPak (' + entries.length + '项) · ' : 'PikPak · ') +
-                (progress ? progress.label : '查询任务中…') + errorHint;
+            view.label.textContent = isCompleted ?
+                '✓ PikPak 已完成' + (view.kind === 'gallery' && entries.length > 1 ?
+                    ' (' + entries.length + '项)' : '') :
+                (view.kind === 'gallery' ? 'PikPak (' + entries.length + '项) · ' : 'PikPak · ') +
+                    (progress ? progress.label : '查询任务中…') + errorHint;
             view.element.dataset.state = progress?.state || 'active';
+            view.element.style.display = isCompleted ? 'inline-block' : 'block';
             view.element.title = progress?.error ?
                 progress.label + '：' + progress.error : view.label.textContent;
-            view.track.style.display = progress?.percent == null ? 'none' : 'block';
+            view.track.style.display = isCompleted || progress?.percent == null ? 'none' : 'block';
             view.fill.style.width = progress?.percent == null ? '0%' : progress.percent.toFixed(2) + '%';
         }
     }
@@ -2227,6 +2251,12 @@ const TOKEN = Tool.urlGetToken(window.location.href);
 
 let ariaClient;
 const bridgeProgressMonitor = new BridgeProgressMonitor();
+
+// Extended gallery metadata (.gl3e) is positioned and must not host flow-based progress widgets.
+function appendBridgeGalleryStatus(row, gid, fallbackHost) {
+    const contentHost = row.querySelector('.gl4e');
+    (contentHost || fallbackHost).appendChild(bridgeProgressMonitor.watchGallery(gid));
+}
 
 console.log({GID, TOKEN});
 
@@ -2684,7 +2714,7 @@ function init() {
                     statusUI.element.style.textAlign = textAlign;
                     glname.appendChild(statusUI.element);
                 }
-                glname.appendChild(bridgeProgressMonitor.watchGallery(gid));
+                appendBridgeGalleryStatus(tr, gid, glname);
 
                 const listTypeDom = document.querySelector("#dms select > option[selected]");
                 const listType = listTypeDom ? listTypeDom.value : '';
