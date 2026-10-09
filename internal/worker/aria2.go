@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/aria2"
@@ -178,32 +179,36 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 	}
 
 	now := time.Now().UTC()
-	for i := range downloads {
-		download := &downloads[i]
-		if download.Status == domain.DownloadComplete {
-			continue
-		}
-		if download.NextAttemptAt != nil && now.Before(*download.NextAttemptAt) {
-			continue
-		}
-		switch download.Status {
-		case domain.DownloadPending:
-			if err := w.submitDownload(ctx, task, download); err != nil {
-				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
-			}
-		case domain.DownloadError:
-			if downloadRetriesExhausted(download, w.options.MaxRetry) {
+	if batch, ok := w.backend.(aria2.BatchBackend); ok && len(downloads) > 1 {
+		w.processDownloadsBatched(ctx, task, downloads, batch, now)
+	} else {
+		for i := range downloads {
+			download := &downloads[i]
+			if download.Status == domain.DownloadComplete {
 				continue
 			}
-			if err := w.submitDownload(ctx, task, download); err != nil {
-				slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+			if download.NextAttemptAt != nil && now.Before(*download.NextAttemptAt) {
+				continue
 			}
-		default:
-			if err := w.pollDownload(ctx, download); err != nil {
-				slog.Warn("aria2 文件状态查询失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+			switch download.Status {
+			case domain.DownloadPending:
+				if err := w.submitDownload(ctx, task, download); err != nil {
+					slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				}
+			case domain.DownloadError:
+				if downloadRetriesExhausted(download, w.options.MaxRetry) {
+					continue
+				}
+				if err := w.submitDownload(ctx, task, download); err != nil {
+					slog.Warn("aria2 文件提交失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				}
+			default:
+				if err := w.pollDownload(ctx, download); err != nil {
+					slog.Warn("aria2 文件状态查询失败", "task_id", task.ID, "file_id", download.PikPakFileID, "error", err)
+				}
 			}
 		}
-	}
+		}
 
 	downloads, err = w.store.ListDownloads(ctx, task.ID)
 	if err != nil {
@@ -241,6 +246,179 @@ func (w *Aria2Worker) processDownloads(ctx context.Context, task *domain.Task) e
 	return w.store.SaveTask(ctx, task, "", "")
 }
 
+// Keep the number of outstanding URLs bounded: PikPak signed links may expire
+// while jobs wait in aria2's queue. Batch sizes also bound RPC response memory.
+const (
+	maxOutstandingDownloads = 32
+	maxBatchStatusCalls = 50
+	pikpakLinkConcurrency = 4
+)
+
+// Batched processing preserves each download's GID and DB record. If a batch
+// RPC fails, fall back to the existing single-file recovery behavior.
+func (w *Aria2Worker) processDownloadsBatched(ctx context.Context, task *domain.Task, downloads []domain.Download, batch aria2.BatchBackend, now time.Time) {
+	// Reconcile existing aria2 jobs first, freeing slots as files complete.
+	var polling []*domain.Download
+	for i := range downloads {
+		d := &downloads[i]
+		if d.Status == domain.DownloadComplete || d.Status == domain.DownloadPending || d.Status == domain.DownloadError {
+			continue
+		}
+		if d.NextAttemptAt == nil || !now.Before(*d.NextAttemptAt) {
+			polling = append(polling, d)
+		}
+	}
+	for start := 0; start < len(polling); start += maxBatchStatusCalls {
+		end := start + maxBatchStatusCalls
+		if end > len(polling) { end = len(polling) }
+		part := polling[start:end]
+		gids := make([]string, len(part))
+		for i, d := range part { gids[i] = d.Aria2GID }
+		results, err := batch.TellStatusBatch(ctx, task.Aria2InstanceID, gids)
+		if err != nil || len(results) != len(part) {
+			for _, d := range part {
+				if e := w.pollDownload(ctx, d); e != nil { slog.Warn("aria2 状态查询失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e) }
+			}
+			continue
+		}
+		for i, d := range part {
+			var e error
+			if results[i].Err != nil {
+				// Transport succeeded but this GID failed: retain existing
+				// EOF retry and transient polling semantics.
+				e = w.pollDownload(ctx, d)
+			} else if results[i].Status.Status == "error" {
+				e = w.handleAria2Error(ctx, d, results[i].Status)
+			} else {
+				e = w.applyStatus(ctx, d, results[i].Status)
+			}
+			if e != nil { slog.Warn("aria2 状态处理失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e) }
+		}
+	}
+	// Refresh DB state after polling; terminal jobs no longer occupy slots.
+	current, err := w.store.ListDownloads(ctx, task.ID)
+	if err != nil {
+		slog.Warn("aria2 批量分发刷新记录失败", "task_id", task.ID, "error", err)
+		return
+	}
+	outstanding := 0
+	for _, d := range current {
+		switch d.Status {
+		case domain.DownloadComplete, domain.DownloadPending, domain.DownloadError:
+		default:
+			outstanding++
+		}
+	}
+	slots := maxOutstandingDownloads - outstanding
+	if slots <= 0 { return }
+
+	candidates := make([]*domain.Download, 0, slots)
+	for i := range current {
+		d := &current[i]
+		if d.Status != domain.DownloadPending && d.Status != domain.DownloadError { continue }
+		if d.Status == domain.DownloadError && downloadRetriesExhausted(d, w.options.MaxRetry) { continue }
+		if d.NextAttemptAt != nil && now.Before(*d.NextAttemptAt) { continue }
+		candidates = append(candidates, d)
+		if len(candidates) == slots { break }
+	}
+	if len(candidates) == 0 { return }
+
+	// Durable GID reconciliation is mandatory before any addUri: a process
+	// can crash after aria2 accepts a job but before its DB state is saved.
+	gids := make([]string, len(candidates))
+	for i, d := range candidates { gids[i] = d.Aria2GID }
+	existing, err := batch.TellStatusBatch(ctx, task.Aria2InstanceID, gids)
+	if err != nil || len(existing) != len(candidates) {
+		for _, d := range candidates {
+			if e := w.submitDownload(ctx, task, d); e != nil {
+				slog.Warn("aria2 文件回退提交失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e)
+			}
+		}
+		return
+	}
+	pending := make([]*domain.Download, 0, len(candidates))
+	for i, d := range candidates {
+		if existing[i].Err == nil {
+			if e := w.applyStatus(ctx, d, existing[i].Status); e != nil {
+				slog.Warn("aria2 已有 GID 状态恢复失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e)
+			}
+		} else {
+			pending = append(pending, d)
+		}
+	}
+	if len(pending) == 0 { return }
+
+	type preparedURL struct {
+		url string
+		err error
+	}
+	resolved := make([]preparedURL, len(pending))
+	sem := make(chan struct{}, pikpakLinkConcurrency)
+	var wg sync.WaitGroup
+	started := time.Now()
+	for i, d := range pending {
+		wg.Add(1)
+		go func(i int, fileID string) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+				defer func(){ <-sem }()
+			case <-ctx.Done():
+				resolved[i].err = ctx.Err()
+				return
+			}
+			resolved[i].url, resolved[i].err = w.pikpak.GetDownloadURL(ctx, task.PikPakAccountID, fileID)
+		}(i, d.PikPakFileID)
+	}
+	wg.Wait()
+	urlElapsed := time.Since(started)
+
+	requests := make([]aria2.AddRequest, 0, len(pending))
+	indexes := make([]int, 0, len(pending))
+	for i, d := range pending {
+		if resolved[i].err != nil {
+			if e := w.retryDownload(ctx, d, resolved[i].err); e != nil { slog.Warn("PikPak 文件链接获取失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e) }
+			continue
+		}
+		requests = append(requests, aria2.AddRequest{
+			URI: resolved[i].url, GID: d.Aria2GID, RelativePath: d.RelativePath,
+			Overwrite: strings.Contains(task.SourceKey, "#"),
+		})
+		indexes = append(indexes, i)
+	}
+	if len(requests) == 0 { return }
+	addStarted := time.Now()
+	added, err := batch.AddBatch(ctx, task.Aria2InstanceID, task.DownloadDir, requests)
+	addElapsed := time.Since(addStarted)
+	if err != nil || len(added) != len(requests) {
+		// A failed HTTP response can still mean aria2 accepted the batch.
+		// The original single-file path checks each GID before resubmitting.
+		for _, index := range indexes {
+			d := pending[index]
+			if e := w.submitDownload(ctx, task, d); e != nil { slog.Warn("aria2 单文件回退提交失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e) }
+		}
+		return
+	}
+	for i, result := range added {
+		d := pending[indexes[i]]
+		if result.Err != nil || result.GID != d.Aria2GID {
+			if status, statusErr := w.backend.TellStatus(ctx, d.Aria2InstanceID, d.Aria2GID); statusErr == nil {
+				_ = w.applyStatus(ctx, d, status)
+			} else {
+				cause := result.Err
+				if cause == nil { cause = fmt.Errorf("aria2 returned unexpected gid %q, want %q", result.GID, d.Aria2GID) }
+				if e := w.retryDownload(ctx, d, cause); e != nil { slog.Warn("aria2 批量文件提交失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e) }
+			}
+			continue
+		}
+		if e := w.markSubmitted(ctx, task, d, result.GID); e != nil {
+			slog.Warn("aria2 批量文件保存失败", "task_id", task.ID, "file_id", d.PikPakFileID, "error", e)
+		}
+	}
+	slog.Debug("aria2 批量提交完成", "task_id", task.ID, "files", len(requests),
+		"url_ms", urlElapsed.Milliseconds(), "rpc_ms", addElapsed.Milliseconds())
+}
+
 func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, download *domain.Download) error {
 	if status, err := w.backend.TellStatus(ctx, download.Aria2InstanceID, download.Aria2GID); err == nil {
 		return w.applyStatus(ctx, download, status)
@@ -264,12 +442,16 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if gid != download.Aria2GID {
 		return w.retryDownload(ctx, download, fmt.Errorf("aria2 returned unexpected gid %q, want %q", gid, download.Aria2GID))
 	}
+	return w.markSubmitted(ctx, task, download, gid)
+}
+
+func (w *Aria2Worker) markSubmitted(ctx context.Context, task *domain.Task, download *domain.Download, gid string) error {
 	slog.Info("aria2 下载已提交",
 		"task_id", task.ID,
 		"aria2_instance_id", download.Aria2InstanceID,
 		"gid", gid,
 		"path", download.RelativePath,
-        "overwrite", overwrite,
+		"overwrite", strings.Contains(task.SourceKey, "#"),
 	)
 	download.Status = domain.DownloadSubmitted
 	download.RetryCount = 0

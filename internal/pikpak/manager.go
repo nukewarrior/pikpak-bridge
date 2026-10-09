@@ -260,14 +260,31 @@ func (m *Manager) walkFiles(ctx context.Context, client *Client, parentID, prefi
 
 func (m *Manager) GetDownloadURL(ctx context.Context, accountID, fileID string) (string, error) {
 	entry, err := m.get(accountID)
-	if err != nil {
-		return "", err
+	if err != nil { return "", err }
+
+	// Only authentication state requires the account mutex. Each read-only
+	// snapshot has independent fields and shares the concurrency-safe HTTP
+	// transport, so a slow PikPak file GET does not block the other files.
+	entry.mu.Lock()
+	if entry.client.accessToken == "" || time.Now().Unix() >= entry.client.expiresAt {
+		if err := entry.client.Login(ctx); err != nil {
+			entry.mu.Unlock()
+			return "", err
+		}
 	}
+	snapshot := *entry.client
+	snapshot.disableRefresh = true
+	entry.mu.Unlock()
+
+	link, err := snapshot.DownloadURL(ctx, fileID)
+	if KindOf(err) != ErrorKindAuth && KindOf(err) != ErrorKindCaptcha {
+		return link, err
+	}
+
+	// A revoked token or CAPTCHA challenge must be handled serially.
+	// This also persists a refreshed session for subsequent snapshots.
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
-	if err := entry.client.Login(ctx); err != nil {
-		return "", err
-	}
 	return entry.client.DownloadURL(ctx, fileID)
 }
 

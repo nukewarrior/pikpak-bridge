@@ -255,3 +255,14 @@ PikPak deletion runs only after aria2 reports completion and configured verifica
 - E-Hentai 用户脚本的 PikPak Bridge 按钮在重复已完成种子时提示，确认后创建新的下载尝试；原生 aria2 入口依然使用其自身参数。
 
 请先备份 `/data/pikpak-bridge.db` 与 `/data/config.yaml` 再升级。历史记录里原本已永久清理的云端文件无法恢复，也不会被误记为留存缓存。
+
+## 大量小文件的 aria2 分发优化
+
+对于 PikPak 离线下载得到的文件夹（例如包含 117 张图片的画廊），Bridge 不再默认逐个 HTTP RPC 提交、逐个查询 aria2。文件夹中的每个文件仍独立保存路径、GID、进度、失败重试和体积校验，**不会在 Bridge 或 NAS 上额外打包 ZIP**。
+
+- 2 个及以上文件的任务使用 `system.multicall` 批量查询 GID 状态和提交 aria2，单条 RPC 的失败不阻断其他图片；批量 RPC 本身不可用时回退原来的单文件方式。
+- PikPak 下载地址同时最多获取 4 个（共用账号会话的只读快照，鉴权刷新仍串行），以减少大量小文件解析时的网络等待。
+- 每个 Bridge 任务同时最多保留 32 个尚未完成的 aria2 文件任务；随下载完成滚动补充，避免提前获取大量可能过期的签名 URL。
+- 继续遵守目标 aria2 的全局并发设置。上述 32 是 Bridge 允许排队/下载的数量，不代表同时开始 32 个 HTTP 下载。
+- 首次下载和确认重下仍沿用原来的目录、文件名、覆盖行为与 `remote-time=false`，重启后通过确定性 GID 恢复。**本优化不修改 SQLite 表结构，不需要重建数据库**。
+

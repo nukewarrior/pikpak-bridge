@@ -104,11 +104,56 @@ type rpcError struct {
 }
 
 func (c *Client) call(ctx context.Context, method string, params []any, out any) error {
-	if c.url == "" {
-		return errors.New("aria2 rpc url is empty")
-	}
 	if c.secret != "" {
 		params = append([]any{"token:" + c.secret}, params...)
+	}
+	return c.callRaw(ctx, method, params, out)
+}
+
+// system.multicall authorizes each nested method separately. Do not add a
+// token to the outer params: the nested calls contain their own credentials.
+type methodCall struct {
+	MethodName string `json:"methodName"`
+	Params     []any  `json:"params"`
+}
+
+func (c *Client) multiCall(ctx context.Context, calls []methodCall) ([]json.RawMessage, error) {
+	if len(calls) == 0 {
+		return []json.RawMessage{}, nil
+	}
+	if c.secret != "" {
+		for i := range calls {
+			calls[i].Params = append([]any{"token:" + c.secret}, calls[i].Params...)
+		}
+	}
+	var out []json.RawMessage
+	err := c.callRaw(ctx, "system.multicall", []any{calls}, &out)
+	if err != nil {
+		return nil, err
+	}
+	if len(out) != len(calls) {
+		return nil, fmt.Errorf("aria2 multicall returned %d results for %d calls", len(out), len(calls))
+	}
+	return out, nil
+}
+
+func parseMultiResult(raw json.RawMessage, out any) error {
+	var failure rpcError
+	if len(raw) > 0 && raw[0] == '{' {
+		if err := json.Unmarshal(raw, &failure); err != nil { return err }
+		return fmt.Errorf("aria2 rpc error %d: %s", failure.Code, failure.Message)
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil { return err }
+	if len(values) != 1 {
+		return fmt.Errorf("aria2 multicall result has %d values, expected 1", len(values))
+	}
+	return json.Unmarshal(values[0], out)
+}
+
+func (c *Client) callRaw(ctx context.Context, method string, params []any, out any) error {
+	if c.url == "" {
+		return errors.New("aria2 rpc url is empty")
 	}
 	body, err := json.Marshal(rpcRequest{
 		JSONRPC: "2.0",
