@@ -912,6 +912,11 @@ function renderHistoryTasks(tasks) {
           <span>${task.completed_at ? "结束时间" : "最后更新"}</span>
         </div>
         <div class="task-status">${statusBadge(task.status)}</div>
+        <div class="history-actions">
+          ${["COMPLETED","CANCELLED"].includes(task.status) ? '<button class="history-action redo" data-action="redownload" type="button">重新下载</button>' : ''}
+          ${FAILED_TASKS.has(task.status) ? '<button class="history-action redo" data-action="retry" type="button">重试</button>' : ''}
+          <button class="history-action remove" data-action="delete" type="button">删除</button>
+        </div>
         <button class="detail-btn" type="button" aria-label="查看详情">
           <svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>
         </button>
@@ -919,8 +924,45 @@ function renderHistoryTasks(tasks) {
   }).join("");
 
   $("historyTaskList").querySelectorAll("[data-task-id]").forEach(row => {
-    row.addEventListener("click", () => openTask(row.dataset.taskId));
+    row.addEventListener("click", event => {
+      const action = event.target.closest("[data-action]");
+      if(action) {
+        event.preventDefault();
+        event.stopPropagation();
+        historyTaskAction(row.dataset.taskId, action.dataset.action, action);
+        return;
+      }
+      openTask(row.dataset.taskId);
+    });
   });
+}
+
+async function historyTaskAction(id, action, button) {
+  const prompts = {
+    delete: "确定删除这条历史记录吗？NAS 文件与 PikPak 云端缓存不会因此删除。",
+    retry: "确定重试失败任务吗？",
+    redownload: "该作品之前已经下载过。确定让 aria2 重新下载并直接覆盖同名文件吗？若下载失败，旧文件可能不完整。"
+  };
+  if(!window.confirm(prompts[action])) return;
+  button.disabled = true;
+  try {
+    if(action === "delete") {
+      const result = await request(`/api/v1/tasks/${encodeURIComponent(id)}`, {method:"DELETE"});
+      toast(result.status === "CANCELLING" ? "正在清理失败任务占用的资源，稍后自动移除记录" : "历史记录已删除，NAS 文件和云端缓存均已保留");
+    } else if(action === "redownload") {
+      await request(`/api/v1/tasks/${encodeURIComponent(id)}/redownload`, {method:"POST"});
+      toast("已创建新的下载任务");
+    } else {
+      await request(`/api/v1/tasks/${encodeURIComponent(id)}/retry`, {method:"POST"});
+      toast("失败任务已重新开始");
+    }
+    await Promise.all([loadTasks(),loadHistoryTasks()]);
+    return true;
+  } catch(error) {
+    toast("操作失败：" + error.message, true);
+    button.disabled = false;
+    return false;
+  }
 }
 
 async function loadHistoryTasks() {
@@ -963,6 +1005,8 @@ async function openTask(id) {
     const events = (eventsData.events || []).filter(isErrorHistoryEvent);
     const canRetry = FAILED_TASKS.has(task.status);
     const canCancel = ACTIVE.has(task.status) && task.status !== "CANCELLING";
+    const canRedownload = ["COMPLETED","CANCELLED"].includes(task.status);
+    const canDelete = TERMINAL_TASKS.has(task.status);
     $("dialogBody").innerHTML = `
       <dl class="detail-grid">
         <dt>状态</dt><dd>${statusBadge(task.status)}</dd>
@@ -974,6 +1018,7 @@ async function openTask(id) {
         <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account_id || "—")}</dd>
         <dt>PikPak Task ID</dt><dd>${esc(task.pikpak_task_id || "—")}</dd>
         <dt>PikPak Root ID</dt><dd>${esc(task.pikpak_root_file_id || "—")}</dd>
+        <dt>PikPak 云端缓存</dt><dd>${esc(({RETAINED:"已保留",RECLAIMED:"已回收",DELETING:"正在回收",ERROR:"回收失败",UNKNOWN:"未确认"})[task.pikpak_cache_state] || "未确认")}</dd>
         <dt>PikPak Phase</dt><dd>${esc(task.pikpak_phase || "—")}</dd>
         <dt>PikPak 进度</dt><dd>${Number(task.pikpak_progress || 0).toFixed(0)}%</dd>
         <dt>最近进展</dt><dd>${task.pikpak_last_activity_at ? esc(fmtTime(task.pikpak_last_activity_at) + "（" + fmtSince(task.pikpak_last_activity_at) + "）") : "—"}</dd>
@@ -983,6 +1028,16 @@ async function openTask(id) {
         <dt>更新时间</dt><dd>${fmtTime(task.updated_at)}</dd>
         <dt>当前错误</dt><dd>${esc(task.error || "—")}</dd>
       </dl>
+      ${canRedownload ? `
+        <div class="task-retry-panel">
+          <div><strong>重新下载</strong><span>直接推送 aria2 下载至原目录；若存在同名文件会直接覆盖，失败可能损坏原文件。</span></div>
+          <button id="redownloadTaskBtn" class="primary-btn compact" type="button">重新下载</button>
+        </div>` : ""}
+      ${canDelete ? `
+        <div class="task-retry-panel">
+          <div><strong>删除历史记录</strong><span>仅删除记录，不删除 NAS 文件或可回收的 PikPak 缓存。</span></div>
+          <button id="deleteTaskBtn" class="primary-btn compact" type="button">删除记录</button>
+        </div>` : ""}
       ${canRetry ? `
         <div class="task-retry-panel">
           <div>
@@ -1049,6 +1104,13 @@ async function openTask(id) {
       });
     }
 
+    for(const [name,action] of [["redownloadTaskBtn","redownload"],["deleteTaskBtn","delete"]]) {
+      const button = $(name);
+      if(button) button.addEventListener("click", async () => {
+        const success = await historyTaskAction(id,action,button);
+        if(success && action==="delete") $("taskDialog").close();
+      });
+    }
     const retryButton = $("retryTaskBtn");
     if (retryButton) {
       retryButton.addEventListener("click", async () => {

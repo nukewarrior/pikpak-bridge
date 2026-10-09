@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.14
+// @version      1.3.15
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -986,8 +986,31 @@ class PikPakBridgeClient {
         });
     }
 
-    addTask(magnet, target = '') {
+    retryTask(id) {
+        return new Promise((resolve,reject)=>{
+            GM_xmlhttpRequest({
+                method:'POST',
+                url:this.baseURL+'/api/v1/tasks/'+encodeURIComponent(id)+'/retry',
+                timeout:15000,
+                onload:response=>{
+                    let body;
+                    try {body=JSON.parse(response.responseText||'{}');}
+                    catch (_) {reject(new Error('Bridge 重试响应不是合法 JSON'));return;}
+                    if(response.status===200 && body.id) {
+                        resolve({id:body.id,status:body.status,duplicate:false});
+                    } else {
+                        reject(new Error('重试失败（HTTP '+response.status+'）：'+(body.error||'请求失败')));
+                    }
+                },
+                onerror:()=>reject(new Error('无法连接 Bridge')),
+                ontimeout:()=>reject(new Error('Bridge 重试请求超时'))
+            });
+        });
+    }
+
+    addTask(magnet, target = '', force = false) {
         const body = {url: magnet};
+        if(force) body.force = true;
         if(target) body.target = String(target).trim();
         return new Promise((resolve, reject) => {
             GM_xmlhttpRequest({
@@ -1632,7 +1655,27 @@ async function sendTorrentToBridge(torrentLink, button, fileInfo = null) {
         setBridgeButtonText(button, '解析种子…');
         const magnet = await bridgeMagnetFromTorrentLink(torrentLink);
         setBridgeButtonText(button, '提交中…');
-        const task = await client.addTask(magnet, selected.id);
+        let task = await client.addTask(magnet, selected.id);
+        if(task.duplicate && ['COMPLETED','CANCELLED'].includes(task.status)) {
+            const proceed = window.confirm('这个种子之前已经下载过（' +
+                (task.status === 'COMPLETED' ? '已完成' : '已取消') +
+                '）。\n确定重新下载吗？Bridge 会直接通过 aria2 下载并覆盖同名 NAS 文件；下载失败可能导致原文件不完整。');
+            if(!proceed) {
+                setBridgeButtonText(button, '已取消');
+                return;
+            }
+            setBridgeButtonText(button, '重新提交…');
+            task = await client.addTask(magnet, selected.id, true);
+        } else if(task.duplicate && BRIDGE_ACTIVE.has(task.status)) {
+            setBridgeButtonText(button, '进行中');
+            button.title = '该种子已有正在运行的任务：' + task.id;
+            bridgeProgressMonitor.remember(torrentLink, task.id, button.dataset.gid || GID, fileInfo);
+            return;
+        } else if(task.duplicate && BRIDGE_FAILED.has(task.status)) {
+            const proceed = window.confirm('该种子的旧任务失败。确定重试原任务吗？系统会优先复用原有云端资源。');
+            if(!proceed) {setBridgeButtonText(button, '已取消');return;}
+            task = await client.retryTask(task.id);
+        }
         if(!task.duplicate) {
             GM_setValue(bridgeLastTargetStorageKey(client.baseURL), selected.id);
         }

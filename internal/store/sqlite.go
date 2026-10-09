@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -18,6 +19,7 @@ var ErrDuplicate = errors.New("duplicate task")
 
 type SQLite struct {
 	db *sql.DB
+	sourceMu sync.Mutex // serialize source creation and cache reclamation
 }
 
 func Open(path string) (*SQLite, error) {
@@ -77,7 +79,8 @@ func (s *SQLite) init(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			completed_at TEXT,
-			cancel_pending_submission INTEGER NOT NULL DEFAULT 0
+			cancel_pending_submission INTEGER NOT NULL DEFAULT 0,
+            pending_delete INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);`,
@@ -123,13 +126,36 @@ func (s *SQLite) init(ctx context.Context) error {
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_task_id ON downloads(task_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status, next_attempt_at);`,
+		`CREATE TABLE IF NOT EXISTS pikpak_cache_entries (
+            account_id TEXT NOT NULL,
+            root_file_id TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL DEFAULT 0,
+            cached_at TEXT NOT NULL,
+            state TEXT NOT NULL DEFAULT 'RETAINED',
+            last_error TEXT NOT NULL DEFAULT '',
+            retry_at TEXT,
+            PRIMARY KEY (account_id, root_file_id)
+        );`,
+        `CREATE INDEX IF NOT EXISTS idx_pikpak_cache_source ON pikpak_cache_entries(source_key, state);`,
+        `CREATE INDEX IF NOT EXISTS idx_pikpak_cache_eviction ON pikpak_cache_entries(account_id, state, cached_at);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("database init: %w", err)
 		}
 	}
-	return nil
+	// Idempotent migration for databases created before deferred history deletion.
+    for _,migration := range []struct {name,sql string}{
+        {"pending_delete","ALTER TABLE tasks ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0"},
+    } {
+        if _,err:=s.db.ExecContext(ctx,migration.sql);err!=nil &&
+            !strings.Contains(strings.ToLower(err.Error()),"duplicate column") {
+            return fmt.Errorf("migrate %s: %w",migration.name,err)
+        }
+    }
+    return nil
 }
 
 const taskColumns = `id, source, source_type, source_key, name,
@@ -144,8 +170,9 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 		INSERT INTO tasks (
 			id, source, source_type, source_key, name,
 			target_id, target_name, aria2_instance_id, download_dir, status,
+            pikpak_account_id, pikpak_root_file_id,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		task.ID,
 		task.Source,
@@ -157,6 +184,8 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 		task.Aria2InstanceID,
 		task.DownloadDir,
 		string(task.Status),
+        task.PikPakAccountID,
+        task.PikPakRootFileID,
 		task.CreatedAt.UTC().Format(time.RFC3339Nano),
 		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -174,10 +203,9 @@ func (s *SQLite) GetTask(ctx context.Context, id string) (domain.Task, error) {
 }
 
 func (s *SQLite) GetTaskBySourceKey(ctx context.Context, sourceKey string) (domain.Task, error) {
-	return scan(s.db.QueryRowContext(ctx,
-		"SELECT "+taskColumns+" FROM tasks WHERE source_key = ?",
-		sourceKey,
-	))
+    return scan(s.db.QueryRowContext(ctx,
+        "SELECT "+taskColumns+" FROM tasks WHERE source_key = ? OR substr(source_key, 1, length(?)+1) = ? || '#' ORDER BY created_at DESC, id DESC LIMIT 1",
+        sourceKey, sourceKey, sourceKey))
 }
 
 func (s *SQLite) ListTasks(ctx context.Context, limit int) ([]domain.Task, error) {
@@ -858,6 +886,10 @@ func (s *SQLite) ActiveResourceReferences(ctx context.Context) ([]string, []stri
 		SELECT DISTINCT pikpak_account_id, aria2_instance_id
 		FROM tasks
 		WHERE status NOT IN (?, ?, ?, ?, ?, ?)
+        UNION
+        SELECT account_id, '' AS aria2_instance_id
+        FROM pikpak_cache_entries
+        WHERE state IN ('RETAINED','DELETING','ERROR')
 	`,
 		string(domain.TaskCompleted),
 		string(domain.TaskCancelled),

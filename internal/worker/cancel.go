@@ -18,6 +18,9 @@ type cancelStore interface {
  GetTask(context.Context, string) (domain.Task, error)
  ListDownloads(context.Context, string) ([]domain.Download, error)
  SaveTask(context.Context, *domain.Task, string, string) error
+ HasRetainedCache(context.Context, string, string) (bool, error)
+ ListPendingHistoryDeletes(context.Context) ([]string,error)
+ DeleteCompletedPendingHistory(context.Context,string) error
 }
 
 type CancelOptions struct {
@@ -62,6 +65,12 @@ func (w *Canceller) runOnce(ctx context.Context) {
 }
 
 func (w *Canceller) RunOnce(ctx context.Context) error {
+ // Resume pending deletions after a crash between cancellation and DB cleanup.
+ pending, err := w.store.ListPendingHistoryDeletes(ctx)
+ if err!=nil {return err}
+ for _,id:=range pending {
+  if err:=w.store.DeleteCompletedPendingHistory(ctx,id);err!=nil {return err}
+ }
  tasks, err := w.store.ListCancelWork(ctx, time.Now().UTC(), 100)
  if err != nil { return err }
  for _, candidate := range tasks {
@@ -97,8 +106,12 @@ func (w *Canceller) cleanup(ctx context.Context, task *domain.Task) error {
  }
  if task.PikPakRootFileID != "" {
   if task.PikPakAccountID == "" { return w.retry(ctx, task, errors.New("PikPak 根文件 ID 存在但账号 ID 缺失")) }
-  if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
-   return w.retry(ctx, task, fmt.Errorf("删除 PikPak 任务根文件: %w", err))
+  retained, err := w.store.HasRetainedCache(ctx, task.PikPakAccountID, task.PikPakRootFileID)
+  if err != nil { return w.retry(ctx, task, err) }
+  if !retained {
+   if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
+    return w.retry(ctx, task, fmt.Errorf("删除 PikPak 任务根文件: %w", err))
+   }
   }
  }
  now := time.Now().UTC()
@@ -107,7 +120,8 @@ func (w *Canceller) cleanup(ctx context.Context, task *domain.Task) error {
  task.Error = ""
  task.RetryCount = 0
  task.NextAttemptAt = nil
- return w.store.SaveTask(ctx, task, "task.cancelled", "远端清理完成，任务已取消")
+ if err:=w.store.SaveTask(ctx, task, "task.cancelled", "远端清理完成，任务已取消");err!=nil {return err}
+ return w.store.DeleteCompletedPendingHistory(ctx,task.ID)
 }
 
 func (w *Canceller) stopAria2(ctx context.Context, instanceID, gid string) error {

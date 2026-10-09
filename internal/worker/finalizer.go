@@ -16,6 +16,7 @@ type finalizeStore interface {
 	ListDownloads(ctx context.Context, taskID string) ([]domain.Download, error)
 	SaveTask(ctx context.Context, task *domain.Task, eventType, message string) error
 	GetTask(ctx context.Context, id string) (domain.Task, error)
+	RecordRetainedCache(context.Context, *domain.Task, int64) error
 }
 
 type FinalizeOptions struct {
@@ -103,9 +104,10 @@ func (w *Finalizer) processTask(ctx context.Context, task *domain.Task) error {
 	case domain.TaskVerifying:
 		return w.verify(ctx, task)
 	case domain.TaskReadyToCleanup:
-		return w.beginCleanup(ctx, task)
+		task.Status = domain.TaskVerifying
+		return w.store.SaveTask(ctx, task, "cleanup.policy_changed", "改为按空间管理 PikPak 缓存")
 	case domain.TaskPikPakDeleting:
-		return w.cleanup(ctx, task)
+		return w.complete(ctx, task, "旧版清理中断，云端缓存状态未知")
 	default:
 		return nil
 	}
@@ -149,23 +151,12 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 
 	task.RetryCount = 0
 	task.Error = ""
-	if !w.options.CleanupEnabled {
-		return w.complete(ctx, task, fmt.Sprintf("verified %d files, %d bytes; cleanup disabled", len(downloads), total))
+	if err := w.store.RecordRetainedCache(ctx, task, total); err != nil {
+		return w.failVerify(ctx, task, fmt.Errorf("保存 PikPak 云端缓存引用失败: %w", err))
 	}
-
-	if task.PikPakAccountID == "" || task.PikPakRootFileID == "" {
-		return w.failVerify(ctx, task, errors.New("cleanup enabled but PikPak account/root file ID is missing"))
-	}
-	slog.Info("任务校验完成",
-		"task_id", task.ID,
-		"files", len(downloads),
-		"bytes", total,
-		"cleanup_enabled", w.options.CleanupEnabled,
-	)
-	task.Status = domain.TaskReadyToCleanup
-	task.NextAttemptAt = timePtr(time.Now().UTC().Add(w.options.CleanupDelay))
-	return w.store.SaveTask(ctx, task, "verify.complete",
-		fmt.Sprintf("verified %d files, %d bytes", len(downloads), total))
+	slog.Info("任务校验完成，PikPak 云端文件已保留", "task_id", task.ID,
+		"files", len(downloads), "bytes", total)
+	return w.complete(ctx, task, fmt.Sprintf("verified %d files, %d bytes; cloud cache retained", len(downloads), total))
 }
 
 func (w *Finalizer) beginCleanup(ctx context.Context, task *domain.Task) error {

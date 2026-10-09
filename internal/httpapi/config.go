@@ -92,6 +92,15 @@ func (s *Server) updateConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+    for _,accountID := range accountRefs {
+        var oldUser, newUser string
+        for _,account:=range current.PikPak.Accounts {if account.ID==accountID {oldUser=account.Username}}
+        for _,account:=range next.PikPak.Accounts {if account.ID==accountID {newUser=account.Username}}
+        if oldUser!="" && oldUser!=newUser {
+            writeError(w,http.StatusConflict,"账号仍有任务或云端缓存引用，不能通过复用 ID 更换 PikPak 用户身份: "+accountID)
+            return
+        }
+    }
 
 	if err := s.runtime.ApplyConfig(r.Context(), next); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -231,10 +240,10 @@ func validateActiveResources(cfg *config.Config, accountRefs, aria2Refs []string
 	for _, id := range accountRefs {
 		enabled, exists := accounts[id]
 		if !exists {
-			return fmt.Errorf("PikPak account %q is still referenced by an active task and cannot be removed", id)
+			return fmt.Errorf("PikPak account %q is still referenced by an active task or retained cache and cannot be removed", id)
 		}
 		if !enabled {
-			return fmt.Errorf("PikPak account %q is still referenced by an active task and cannot be disabled", id)
+			return fmt.Errorf("PikPak account %q is still referenced by an active task or retained cache and cannot be disabled", id)
 		}
 	}
 
@@ -245,10 +254,10 @@ func validateActiveResources(cfg *config.Config, accountRefs, aria2Refs []string
 	for _, id := range aria2Refs {
 		enabled, exists := instances[id]
 		if !exists {
-			return fmt.Errorf("aria2 instance %q is still referenced by an active task and cannot be removed", id)
+			return fmt.Errorf("aria2 instance %q is still referenced by an active task or retained cache and cannot be removed", id)
 		}
 		if !enabled {
-			return fmt.Errorf("aria2 instance %q is still referenced by an active task and cannot be disabled", id)
+			return fmt.Errorf("aria2 instance %q is still referenced by an active task or retained cache and cannot be disabled", id)
 		}
 	}
 	return nil

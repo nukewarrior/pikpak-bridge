@@ -15,6 +15,7 @@ import (
 type fakeAria2 struct {
 	added         map[string]bool
 	addCalls      int
+    overwriteCalls []bool
 	tellStatusErr error
 	statusByGID   map[string]aria2.Status
 	forgetCalls   int
@@ -30,8 +31,9 @@ func (f *fakeAria2) Snapshot(context.Context, string) (aria2.InstanceSnapshot, e
 		ID: "a1", Name: "aria2", Enabled: true, Healthy: true,
 	}, nil
 }
-func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string, overwrite bool) (string, error) {
 	f.addCalls++
+    f.overwriteCalls=append(f.overwriteCalls,overwrite)
 	if uri == "" || instanceID != "a1" || baseDir != "/downloads/movies" || relativePath == "" {
 		return "", errors.New("bad add args")
 	}
@@ -641,4 +643,29 @@ func TestManualRetryUsesDifferentDeterministicGID(t *testing.T) {
 	if retry1 != retry1Again {
 		t.Fatalf("manual retry gid must remain deterministic: %s != %s", retry1, retry1Again)
 	}
+}
+
+func TestRepeatDownloadSendsDirectlyToOriginalAria2Directory(t *testing.T) {
+    db,err:=store.Open(t.TempDir()+"/repeat.db")
+    if err!=nil {t.Fatal(err)}
+    defer db.Close()
+    now:=time.Now().UTC()
+    task:=domain.Task{
+        ID:"repeat-1",Source:"magnet:?xt=urn:btih:0123456789ABCDEF0123456789ABCDEF01234567",
+        SourceType:"magnet",SourceKey:"btih:0123456789ABCDEF0123456789ABCDEF01234567#repeat-1",
+        Name:"Album",TargetID:"movies",TargetName:"电影",Aria2InstanceID:"a1",
+        DownloadDir:"/downloads/movies",Status:domain.TaskWaitingAria2,
+        PikPakAccountID:"pp1",CreatedAt:now,UpdatedAt:now,
+    }
+    if err:=db.CreateTask(context.Background(),task);err!=nil {t.Fatal(err)}
+    if err:=db.ReplaceRemoteFiles(context.Background(),task.ID,[]domain.RemoteFile{{
+        TaskID:task.ID,PikPakFileID:"file-1",Name:"image.png",RelativePath:"Album/image.png",Size:1234,
+    }});err!=nil {t.Fatal(err)}
+    backend:=&fakeAria2{}
+    worker:=NewAria2(db,fakeURLProvider{},backend,Aria2Options{})
+    if err:=worker.RunOnce(context.Background());err!=nil {t.Fatal(err)}
+    if backend.addCalls!=1 {t.Fatalf("expected 1 aria2 submit, got %d",backend.addCalls)}
+    if len(backend.overwriteCalls)!=1 || !backend.overwriteCalls[0] {
+        t.Fatalf("repeat must submit an overwriting aria2 job: %+v",backend.overwriteCalls)
+    }
 }

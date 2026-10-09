@@ -21,6 +21,9 @@ import (
 
 type taskStore interface {
 	CreateTask(context.Context, domain.Task) error
+	CreateTaskFromSource(context.Context, *domain.Task, bool) (*domain.Task, error)
+	DeleteHistoryTask(context.Context, string) error
+    CacheState(context.Context,string,string) (string,error)
 	SaveTask(context.Context, *domain.Task, string, string) error
 	RequestCancel(context.Context, string) (domain.Task, error)
 	GetTask(context.Context, string) (domain.Task, error)
@@ -91,6 +94,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/downloads", s.getTaskDownloads)
 	s.mux.HandleFunc("GET /api/v1/tasks/{id}/events", s.getTaskEvents)
 	s.mux.HandleFunc("POST /api/v1/tasks/{id}/retry", s.retryFailedTask)
+	s.mux.HandleFunc("POST /api/v1/tasks/{id}/redownload", s.redownloadTask)
+	s.mux.HandleFunc("DELETE /api/v1/tasks/{id}", s.deleteHistoryTask)
 	s.mux.HandleFunc("POST /api/v1/tasks/{id}/cancel", s.cancelTask)
 	s.registerWebUI()
 }
@@ -225,6 +230,7 @@ type createTaskRequest struct {
 	Magnet string `json:"magnet"`
 	Hash   string `json:"hash"`
 	Target string `json:"target"`
+    Force bool `json:"force"`
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
@@ -247,7 +253,7 @@ func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
 	if input == "" {
 		input = req.Hash
 	}
-	s.createFromSource(w, r, input, strings.TrimSpace(req.Target))
+	s.createFromSource(w, r, input, strings.TrimSpace(req.Target), req.Force)
 }
 
 func (s *Server) createTaskText(w http.ResponseWriter, r *http.Request) {
@@ -261,10 +267,10 @@ func (s *Server) createTaskText(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	s.createFromSource(w, r, string(body), "")
+	s.createFromSource(w, r, string(body), "", false)
 }
 
-func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input, targetID string) {
+func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input, targetID string, force bool) {
 	if s.runtime == nil {
 		writeError(w, http.StatusServiceUnavailable, "runtime is unavailable")
 		return
@@ -300,24 +306,22 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input,
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
-	if err := s.store.CreateTask(r.Context(), task); err != nil {
-		if errors.Is(err, store.ErrDuplicate) {
-			existing, getErr := s.store.GetTaskBySourceKey(r.Context(), n.SourceKey)
-			if getErr != nil {
-				writeError(w, http.StatusConflict, "task already exists")
-				return
-			}
-			writeJSON(w, http.StatusConflict, map[string]any{
-				"error":            "task already exists",
-				"existing_task_id": existing.ID,
-				"status":           existing.Status,
-				"target_id":        existing.TargetID,
-			})
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "create task")
-		return
-	}
+	existing, err := s.store.CreateTaskFromSource(r.Context(), &task, force)
+    if err != nil {
+        writeError(w, http.StatusInternalServerError, "create task: "+err.Error())
+        return
+    }
+    if existing != nil {
+        writeJSON(w, http.StatusConflict, map[string]any{
+            "error": "task already exists",
+            "existing_task_id": existing.ID,
+            "status": existing.Status,
+            "target_id": existing.TargetID,
+            "name": existing.Name,
+            "completed_at": existing.CompletedAt,
+        })
+        return
+    }
 	writeJSON(w, http.StatusCreated, task)
 }
 
@@ -339,7 +343,12 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get task")
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	    state, err:=s.store.CacheState(r.Context(),task.PikPakAccountID,task.PikPakRootFileID)
+    if err!=nil {writeError(w,http.StatusInternalServerError,"cache state lookup failed");return}
+    writeJSON(w,http.StatusOK,struct {
+        domain.Task
+        CacheState string `json:"pikpak_cache_state"`
+    }{Task:task,CacheState:state})
 }
 
 func (s *Server) getTaskDownloads(w http.ResponseWriter, r *http.Request) {
@@ -411,17 +420,25 @@ func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
 	previousStatus := task.Status
 	switch task.Status {
 	case domain.TaskPikPakFailed:
-		if err := s.store.ClearTransferState(r.Context(), task.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, "reset PikPak transfer state")
-			return
-		}
-		task.PikPakAccountID = ""
-		task.PikPakTaskID = ""
-		task.PikPakRootFileID = ""
-		task.PikPakPhase = ""
-		task.PikPakProgress = 0
-		task.PikPakLastActivityAt = nil
-		task.Status = domain.TaskWaitingPikPakAccount
+        if task.PikPakRootFileID!="" && task.PikPakAccountID!="" {
+            // Reuse the already owned PikPak root rather than orphaning it.
+            task.Status=domain.TaskPikPakComplete
+        } else if task.PikPakTaskID!="" {
+            writeError(w,http.StatusConflict,"旧 PikPak 离线任务仍有远端 ID，根文件尚未确认；请先通过删除历史记录安全清理远端资源，再重新提交")
+            return
+        } else {
+            if err:=s.store.ClearTransferState(r.Context(),task.ID);err!=nil {
+                writeError(w,http.StatusInternalServerError,"reset PikPak transfer state")
+                return
+            }
+            task.PikPakAccountID=""
+            task.PikPakTaskID=""
+            task.PikPakRootFileID=""
+            task.PikPakPhase=""
+            task.PikPakProgress=0
+            task.PikPakLastActivityAt=nil
+            task.Status=domain.TaskWaitingPikPakAccount
+        }
 	case domain.TaskAria2Failed:
 		if err := s.store.ResetDownloadsForRetry(r.Context(), task.ID, false); err != nil {
 			writeError(w, http.StatusInternalServerError, "reset aria2 downloads")
@@ -454,6 +471,36 @@ func (s *Server) retryFailedTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, task)
+}
+
+func (s *Server) redownloadTask(w http.ResponseWriter, r *http.Request) {
+    previous, err := s.store.GetTask(r.Context(), r.PathValue("id"))
+    if err != nil {
+        if errors.Is(err, sql.ErrNoRows) { writeError(w, http.StatusNotFound, "task not found"); return }
+        writeError(w, http.StatusInternalServerError, err.Error()); return
+    }
+    if previous.Status != domain.TaskCompleted && previous.Status != domain.TaskCancelled {
+        writeError(w, http.StatusConflict, "only completed or cancelled tasks can be redownloaded")
+        return
+    }
+    // Force creates an independent run. The cached source, if present, is reused.
+    s.createFromSource(w, r, previous.Source, previous.TargetID, true)
+}
+
+func (s *Server) deleteHistoryTask(w http.ResponseWriter, r *http.Request) {
+    err := s.store.DeleteHistoryTask(r.Context(), r.PathValue("id"))
+    switch {
+    case err == nil:
+        w.WriteHeader(http.StatusNoContent)
+    case errors.Is(err, sql.ErrNoRows):
+        writeError(w, http.StatusNotFound, "task not found")
+    case errors.Is(err, store.ErrCleanupScheduled):
+        writeJSON(w, http.StatusAccepted, map[string]string{"status":"CANCELLING","message":"正在清理远端资源，完成后删除历史记录"})
+    case errors.Is(err, store.ErrTaskNotTerminal), errors.Is(err, store.ErrUnsafeDeletion):
+        writeError(w, http.StatusConflict, err.Error())
+    default:
+        writeError(w, http.StatusInternalServerError, "delete history: "+err.Error())
+    }
 }
 
 func (s *Server) listTasks(w http.ResponseWriter, r *http.Request) {

@@ -1440,7 +1440,7 @@ dialog::backdrop {
   padding: 15px 18px;
   border-top: 1px solid #edf1f7;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 155px 105px auto;
+  grid-template-columns: minmax(0, 1fr) 145px 100px minmax(125px,auto) 44px;
   gap: 18px;
   align-items: center;
   cursor: pointer;
@@ -1612,4 +1612,15 @@ dialog::backdrop {
   .task-retry-panel .primary-btn {
     width: 100%;
   }
+}
+
+.history-actions { display:flex; gap:7px; flex-wrap:wrap; justify-content:flex-end; }
+.history-action { background:#f6f9ff; border:1px solid #dce4f1; color:#476081;
+  padding:7px 11px; border-radius:9px; font-weight:600; font-size:11px; white-space:nowrap; }
+.history-action:hover { background:#eaf1ff; color:#2f6df6; }
+.history-action.remove { background:#fff7f8; border-color:#f5dce0; color:#bb4e5b; }
+.history-action.remove:hover { background:#ffe9ec; }
+@media (max-width: 820px) {
+  .history-actions {grid-column:1/-1;justify-content:flex-start;}
+  .history-task { gap:10px; }
 }

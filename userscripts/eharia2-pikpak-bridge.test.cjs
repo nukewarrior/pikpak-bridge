@@ -1403,3 +1403,58 @@ test('Bridge progress entry points do not replace direct aria2 polling or torren
     assert.match(script,/return this\.getJSON\('\/api\/v1\/tasks\?limit=200'\)/);
     assert.match(script,/return this\.getJSON\('\/api\/v1\/tasks\/' \+ encodeURIComponent\(id\) \+ '\/downloads'\)/);
 });
+
+test('completed Bridge task asks before creating a forced replacement run', async () => {
+    const prompts = [];
+    const {ctx, requests} = createHarness(req => respondWithTorrent(req, request => {
+        if(request.method === 'GET') {
+            request.onload({status: 200, responseText: JSON.stringify({targets:[{id:'nas',name:'NAS'}]})});
+        } else {
+            const body=JSON.parse(request.data);
+            request.onload(body.force
+                ? {status:201,responseText:'{"id":"new-task","status":"PIKPAK_COMPLETE"}'}
+                : {status:409,responseText:'{"existing_task_id":"old-task","status":"COMPLETED","target_id":"nas"}'});
+        }
+    }));
+    ctx.window.confirm = message => {prompts.push(message);return true;};
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    await evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    const posts=requests.filter(x=>x.method==='POST');
+    assert.equal(posts.length,2);
+    assert.equal(JSON.parse(posts[0].data).force,undefined);
+    assert.equal(JSON.parse(posts[1].data).force,true);
+    assert.equal(prompts.length,1);
+    assert.match(prompts[0],/已经下载过/);
+    assert.equal(button.value,'已提交');
+});
+
+test('declining repeat confirmation does not create a second Bridge task', async () => {
+    const {ctx,requests}=createHarness(req=>respondWithTorrent(req,request=>{
+        if(request.method==='GET') {
+            request.onload({status:200,responseText:'{"targets":[{"id":"nas"}]}'});
+        } else {
+            request.onload({status:409,responseText:'{"existing_task_id":"old-task","status":"COMPLETED"}'});
+        }
+    }));
+    ctx.window.confirm=()=>false;
+    const doc=fakeDocument();ctx.document=doc;
+    const button={tagName:'INPUT',dataset:{},value:'发送到 PikPak',disabled:false,title:''};
+    ctx.testButton=button;
+    await evaluate(ctx,"sendTorrentToBridge('https://exhentai.org/torrent/123/" + hexHash + "/file.torrent', testButton)");
+    assert.equal(requests.filter(x=>x.method==='POST').length,1);
+    assert.equal(button.value,'已取消');
+});
+
+test('script retries an existing failed Bridge task instead of creating another cloud task', async () => {
+    const {ctx,requests}=createHarness(req=>{
+        if(req.method!=='POST') throw Error('unexpected method');
+        req.onload({status:200,responseText:'{"id":"failed-old","status":"PIKPAK_COMPLETE"}'});
+    });
+    const result=await evaluate(ctx,"new PikPakBridgeClient('https://bridge.example.org').retryTask('failed-old')");
+    assert.equal(result.id,'failed-old');
+    assert.equal(result.status,'PIKPAK_COMPLETE');
+    assert.equal(requests[0].url,'https://bridge.example.org/api/v1/tasks/failed-old/retry');
+    assert.equal(requests.length,1);
+});

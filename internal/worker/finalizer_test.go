@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
@@ -86,7 +85,7 @@ func prepareVerifiedTask(t *testing.T, expected, total, completed int64) (*store
 	return db, task
 }
 
-func TestFinalizerCompletesAndDeletesExactRoot(t *testing.T) {
+func TestFinalizerCompletesAndRetainsCache(t *testing.T) {
 	db, task := prepareVerifiedTask(t, 1234, 1234, 1234)
 	defer db.Close()
 	provider := &cleanupProvider{}
@@ -106,9 +105,13 @@ func TestFinalizerCompletesAndDeletesExactRoot(t *testing.T) {
 	if got.Status != domain.TaskCompleted {
 		t.Fatalf("want COMPLETED, got %s", got.Status)
 	}
-	if provider.deletes != 1 {
-		t.Fatalf("want exactly one delete, got %d", provider.deletes)
-	}
+	if provider.deletes != 0 {
+        t.Fatalf("completed downloads must retain cloud cache, got %d deletes", provider.deletes)
+    }
+    cache, err := db.LatestRetainedCache(context.Background(), "url:test")
+    if err != nil || cache == nil || cache.RootFileID != "root-1" {
+        t.Fatalf("verified cloud cache not persisted: cache=%+v err=%v",cache,err)
+    }
 	if got.CompletedAt == nil {
 		t.Fatal("completed_at not set")
 	}
@@ -136,29 +139,13 @@ func TestFinalizerRejectsSizeMismatchWithoutDelete(t *testing.T) {
 	}
 }
 
-func TestFinalizerRetriesCleanup(t *testing.T) {
-	db, task := prepareVerifiedTask(t, 1234, 1234, 1234)
-	defer db.Close()
-	provider := &cleanupProvider{err: errors.New("temporary delete failure")}
-	w := NewFinalizer(db, provider, FinalizeOptions{
-		VerifySize: true, CleanupEnabled: true, CleanupDelay: 0,
-		RetryInterval: time.Millisecond, MaxRetry: 3,
-	})
-	if err := w.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.RunOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.RunOnce(context.Background()); err == nil {
-		// RunOnce logs per-task failures internally and returns only iteration
-		// failures, so this path is expected.
-	}
-	got, err := db.GetTask(context.Background(), task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != domain.TaskPikPakDeleting {
-		t.Fatalf("want PIKPAK_DELETING retry state, got %s", got.Status)
-	}
+func TestFinalizerNeverDeletesRetainedCache(t *testing.T) {
+    db, task := prepareVerifiedTask(t, 1234, 1234, 1234)
+    defer db.Close()
+    provider := &cleanupProvider{}
+    worker := NewFinalizer(db, provider, FinalizeOptions{VerifySize:true, CleanupEnabled:true})
+    if err:=worker.RunOnce(context.Background());err!=nil {t.Fatal(err)}
+    if provider.deletes!=0 {t.Fatalf("expected zero cloud deletes, got %d", provider.deletes)}
+    got,err:=db.GetTask(context.Background(),task.ID)
+    if err!=nil || got.Status!=domain.TaskCompleted {t.Fatalf("not completed: %+v, %v",got,err)}
 }

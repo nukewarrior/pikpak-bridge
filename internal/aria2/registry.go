@@ -24,7 +24,7 @@ type InstanceSnapshot struct {
 type Backend interface {
 	Snapshots(ctx context.Context) []InstanceSnapshot
 	Snapshot(ctx context.Context, instanceID string) (InstanceSnapshot, error)
-	Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error)
+	Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string, overwrite bool) (string, error)
 	TellStatus(ctx context.Context, instanceID, gid string) (Status, error)
 	Remove(ctx context.Context, instanceID, gid string) error
 	Forget(ctx context.Context, instanceID, gid string) error
@@ -103,7 +103,7 @@ func (r *Registry) Snapshot(ctx context.Context, instanceID string) (InstanceSna
 	return snapshot, nil
 }
 
-func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relativePath string, overwrite bool) (string, error) {
 	instance, err := r.enabled(instanceID)
 	if err != nil {
 		return "", err
@@ -119,10 +119,15 @@ func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relat
 		"auto-file-renaming": "false",
 		"max-tries":          "1",
 	}
-	if dir != "" {
-		options["dir"] = dir
-	}
-	return instance.client.AddURIWithOptions(ctx, uri, options)
+    if overwrite {
+        // Confirmed repeat downloads go straight to the final aria2 directory.
+        options["continue"] = "false"
+        options["allow-overwrite"] = "true"
+    }
+    if dir != "" {
+        options["dir"] = dir
+    }
+    return instance.client.AddURIWithOptions(ctx, uri, options)
 }
 
 func (r *Registry) TellStatus(ctx context.Context, instanceID, gid string) (Status, error) {
