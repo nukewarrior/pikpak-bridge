@@ -1398,6 +1398,11 @@ test('expanded gallery status fits between native category and date without shif
     evaluate(ctx,'bridgeProgressMonitor.render()');
     assert.equal(badge.style.display,'inline-block');
     assert.equal(badge.children[1].style.display,'none');
+    evaluate(ctx,'bridgeProgressMonitor.records = []');
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'none');
+    evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
+    assert.equal(badge.style.display,'none','untracked badges must not reappear after repositioning');
 
     const fallback=doc.createElement('td');
     ctx.compact={querySelector() {return null;}};
