@@ -140,6 +140,7 @@ type setupTarget struct {
 	Name            string `json:"name"`
 	Aria2InstanceID string `json:"aria2_instance"`
 	Dir             string `json:"dir"`
+	LocalDir        string `json:"local_dir"`
 	Default         bool   `json:"default"`
 	Enabled         *bool  `json:"enabled,omitempty"`
 }
