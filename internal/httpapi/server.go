@@ -203,6 +203,7 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 			Name:            strings.TrimSpace(target.Name),
 			Aria2InstanceID: strings.TrimSpace(target.Aria2InstanceID),
 			Dir:             strings.TrimSpace(target.Dir),
+            LocalDir:        strings.TrimSpace(target.LocalDir),
 			Default:         target.Default,
 			Enabled:         target.Enabled,
 		})
