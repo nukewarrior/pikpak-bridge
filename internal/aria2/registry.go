@@ -118,6 +118,7 @@ func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relat
 		"continue":           "true",
 		"auto-file-renaming": "false",
 		"max-tries":          "1",
+		"remote-time":        "false", // Use local file modification time instead of HTTP Last-Modified.
 	}
     if overwrite {
         // Confirmed repeat downloads go straight to the final aria2 directory.

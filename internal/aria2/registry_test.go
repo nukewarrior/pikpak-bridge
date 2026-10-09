@@ -66,6 +66,9 @@ func TestRegistryOverwriteOptionsOnlyForConfirmedRepeat(t *testing.T) {
     }
     if len(received)!=2 {t.Fatalf("expected two RPCs, got %d",len(received))}
     first,second:=received[0],received[1]
+    if first["remote-time"]!="false" || second["remote-time"]!="false" {
+        t.Fatalf("initial and repeat downloads must use local timestamps: %+v %+v",first,second)
+    }
     if first["dir"]!="/downloads/Album" || second["dir"]!="/downloads/Album" ||
         first["out"]!="image.png" || second["out"]!="image.png" {
         t.Fatalf("wrong destination: %+v %+v",first,second)
