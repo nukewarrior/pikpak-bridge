@@ -1664,8 +1664,14 @@ dialog::backdrop {
   align-items: center;
   min-width: 0;
 }
-.quota-summary-main { gap: 9px; }
-.quota-summary-main > svg {
+.quota-summary-main { gap: 14px; }
+.quota-summary-label-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  flex: 0 0 auto;
+}
+.quota-summary-label-group > svg {
   width: 21px;
   height: 21px;
   flex: 0 0 auto;
@@ -1677,19 +1683,23 @@ dialog::backdrop {
 }
 .quota-summary-label {
   font-size: 13px;
+  line-height: 1.2;
   color: #43516c;
   font-weight: 650;
   white-space: nowrap;
 }
 .quota-summary-value {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
+  flex: 0 0 auto;
   gap: 4px;
   min-width: 0;
+  line-height: 1;
 }
 .quota-summary-number {
+  display: block;
   font-size: 25px;
-  line-height: 1.2;
+  line-height: 1;
   font-weight: 800;
   color: var(--blue);
   white-space: nowrap;
@@ -1702,7 +1712,15 @@ dialog::backdrop {
 }
 .quota-summary-number.is-depleted { color: var(--orange); }
 .quota-summary-number.is-stale { color: var(--muted); }
-.quota-summary-unit { color: var(--text); font-size: 13px; font-weight: 650; white-space: nowrap; }
+.quota-summary-unit {
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 650;
+  white-space: nowrap;
+  position: relative;
+  top: 1px;
+}
 .quota-summary-unit[hidden], .quota-meta-divider[hidden] { display: none; }
 
 .quota-summary-meta {
@@ -1776,8 +1794,9 @@ dialog::backdrop {
     gap: 8px;
     border-radius: 12px;
   }
-  .quota-summary-main { gap: 6px; }
-  .quota-summary-main > svg { width: 18px; height: 18px; }
+  .quota-summary-main { gap: 9px; }
+  .quota-summary-label-group { gap: 6px; }
+  .quota-summary-label-group > svg { width: 18px; height: 18px; }
   .quota-summary-label { font-size: 12px; }
   .quota-summary-number { font-size: 21px; }
   .quota-summary-number.is-placeholder { font-size: 11px; }
