@@ -1321,6 +1321,65 @@ test('Bridge reports separate cloud and aria2 phase progress without mislabeling
     assert.equal(p.label,'已完成 100%');
 });
 
+test('expanded gallery places Bridge status in content cell instead of positioned metadata', () => {
+    const {ctx}=createHarness(()=>{});
+    const doc=fakeDocument();ctx.document=doc;
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    const metadata=doc.createElement('td');
+    const content=doc.createElement('td');
+    ctx.expanded={querySelector(selector) {return selector === '.gl4e' ? content : null;}};
+    ctx.metadata=metadata;
+    evaluate(ctx,'appendBridgeGalleryStatus(expanded,123,metadata)');
+    assert.equal(content.children.length,1);
+    assert.equal(content.children[0].className,'aria2helper-bridge-progress');
+    assert.equal(metadata.children.length,0,'fixed-position gallery metadata must remain untouched');
+
+    const fallback=doc.createElement('td');
+    ctx.compact={querySelector() {return null;}};
+    ctx.fallback=fallback;
+    evaluate(ctx,'appendBridgeGalleryStatus(compact,124,fallback)');
+    assert.equal(fallback.children.length,1,'other list layouts keep their status entry');
+    assert.match(script,/\.gl4e > \.aria2helper-bridge-progress \{[\s\S]*?clear: both;/);
+});
+
+test('completed Bridge gallery status uses a compact badge and hides the completed progress track', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.document=fakeDocument();
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    ctx.link='https://e-hentai.org/torrent/123/completed.torrent';
+    evaluate(ctx,"bridgeProgressMonitor.remember(link,'task-done',123)");
+    const badge=evaluate(ctx,'bridgeProgressMonitor.watchGallery(123)');
+    evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-done',{id:'task-done',status:'COMPLETED'})");
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.dataset.state,'completed');
+    assert.equal(badge.style.display,'inline-block');
+    assert.equal(badge.children[0].textContent,'✓ PikPak 已完成');
+    assert.equal(badge.children[1].style.display,'none');
+    assert.match(script,/\.aria2helper-bridge-progress\[data-state="completed"\]/);
+
+    evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-done',{id:'task-done',status:'PIKPAK_RUNNING',pikpak_progress:65})");
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'block');
+    assert.equal(badge.children[1].style.display,'block');
+    assert.match(badge.children[0].textContent,/PikPak 云下载中 65%/);
+});
+
+test('failed Bridge gallery status leaves long errors in the hover title', () => {
+    const {ctx}=createHarness(()=>{});
+    ctx.document=fakeDocument();
+    evaluate(ctx,'bridgeProgressMonitor.schedule = () => {}');
+    ctx.link='https://e-hentai.org/torrent/123/error.torrent';
+    evaluate(ctx,"bridgeProgressMonitor.remember(link,'task-error',123)");
+    const badge=evaluate(ctx,'bridgeProgressMonitor.watchGallery(123)');
+    evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-error',{id:'task-error',status:'ARIA2_FAILED',error:'磁盘空间不足'})");
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.dataset.state,'failed');
+    assert.equal(badge.style.display,'block');
+    assert.match(badge.children[0].textContent,/Aria2 失败/);
+    assert.doesNotMatch(badge.children[0].textContent,/磁盘空间不足/);
+    assert.match(badge.title,/磁盘空间不足/);
+});
+
 test('Bridge tracked torrents in the same gallery remain independent and restore on reload', async () => {
     const urlA='https://e-hentai.org/torrent/123/first.torrent';
     const urlB='https://e-hentai.org/torrent/123/second.torrent';
