@@ -1024,6 +1024,7 @@ async function openTask(id) {
         <dt>PikPak 账号</dt><dd>${esc(task.pikpak_account_id || "—")}</dd>
         <dt>PikPak Task ID</dt><dd>${esc(task.pikpak_task_id || "—")}</dd>
         <dt>PikPak Root ID</dt><dd>${esc(task.pikpak_root_file_id || "—")}</dd>
+        <dt>PikPak 云端缓存</dt><dd>${esc(({RETAINED:"已保留",RECLAIMED:"已回收",DELETING:"正在回收",ERROR:"回收失败",UNKNOWN:"未确认"})[task.pikpak_cache_state] || "未确认")}</dd>
         <dt>PikPak Phase</dt><dd>${esc(task.pikpak_phase || "—")}</dd>
         <dt>PikPak 进度</dt><dd>${Number(task.pikpak_progress || 0).toFixed(0)}%</dd>
         <dt>最近进展</dt><dd>${task.pikpak_last_activity_at ? esc(fmtTime(task.pikpak_last_activity_at) + "（" + fmtSince(task.pikpak_last_activity_at) + "）") : "—"}</dd>

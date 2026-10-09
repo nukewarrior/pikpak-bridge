@@ -550,6 +550,24 @@ func (w *Worker) beginResolve(ctx context.Context, task *domain.Task) error {
 func (w *Worker) resolveFiles(ctx context.Context, task *domain.Task) error {
 	resolved, err := w.provider.ResolveFiles(ctx, task.PikPakAccountID, task.PikPakRootFileID)
 	if err != nil {
+        // A retained root can be manually removed from PikPak outside Bridge.
+        // Do not retry this stale cache forever; mark it gone and submit anew.
+        if pikpak.KindOf(err)==pikpak.ErrorKindNotFound &&
+           task.PikPakTaskID=="" && strings.Contains(task.SourceKey,"#") {
+            if cacheDB,ok:=w.store.(interface {
+                MarkCacheMissing(context.Context,string,string) error
+            });ok {
+                if markErr:=cacheDB.MarkCacheMissing(ctx,task.PikPakAccountID,task.PikPakRootFileID);markErr!=nil {
+                    return w.retry(ctx,task,domain.TaskResolvingFiles,domain.TaskPikPakFailed,markErr)
+                }
+            }
+            task.PikPakAccountID=""
+            task.PikPakRootFileID=""
+            task.Status=domain.TaskWaitingPikPakAccount
+            task.Error=""
+            task.NextAttemptAt=nil
+            return w.store.SaveTask(ctx,task,"pikpak.cache_missing","云端缓存已不存在，重新安排离线下载")
+        }
 		return w.retry(ctx, task, domain.TaskResolvingFiles, domain.TaskPikPakFailed, err)
 	}
 	files := resolved.Files

@@ -23,6 +23,7 @@ type taskStore interface {
 	CreateTask(context.Context, domain.Task) error
 	CreateTaskFromSource(context.Context, *domain.Task, bool) (*domain.Task, error)
 	DeleteHistoryTask(context.Context, string) error
+    CacheState(context.Context,string,string) (string,error)
 	SaveTask(context.Context, *domain.Task, string, string) error
 	RequestCancel(context.Context, string) (domain.Task, error)
 	GetTask(context.Context, string) (domain.Task, error)
@@ -347,7 +348,12 @@ func (s *Server) getTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get task")
 		return
 	}
-	writeJSON(w, http.StatusOK, task)
+	    state, err:=s.store.CacheState(r.Context(),task.PikPakAccountID,task.PikPakRootFileID)
+    if err!=nil {writeError(w,http.StatusInternalServerError,"cache state lookup failed");return}
+    writeJSON(w,http.StatusOK,struct {
+        domain.Task
+        CacheState string `json:"pikpak_cache_state"`
+    }{Task:task,CacheState:state})
 }
 
 func (s *Server) getTaskDownloads(w http.ResponseWriter, r *http.Request) {

@@ -206,3 +206,18 @@ func (s *SQLite) HasPendingCacheReclaim(ctx context.Context, accountID string) (
     if errors.Is(err,sql.ErrNoRows) {return false,nil}
     return v==1,err
 }
+
+func (s *SQLite) MarkCacheMissing(ctx context.Context, accountID, rootID string) error {
+    _,err:=s.db.ExecContext(ctx,`UPDATE pikpak_cache_entries SET state='RECLAIMED',
+        last_error='remote file no longer exists',retry_at=NULL
+        WHERE account_id=? AND root_file_id=? AND state='RETAINED'`,accountID,rootID)
+    return err
+}
+func (s *SQLite) CacheState(ctx context.Context, accountID, rootID string) (string,error) {
+    if accountID=="" || rootID=="" {return "UNKNOWN",nil}
+    var status string
+    err:=s.db.QueryRowContext(ctx,`SELECT state FROM pikpak_cache_entries
+       WHERE account_id=? AND root_file_id=?`,accountID,rootID).Scan(&status)
+    if errors.Is(err,sql.ErrNoRows) {return "UNKNOWN",nil}
+    return status,err
+}
