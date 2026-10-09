@@ -69,15 +69,19 @@
 
       <main id="homeView" class="home-view">
         <section class="hero">
-          <div class="hero-illustration" aria-hidden="true">
-            <svg viewBox="0 0 64 64">
-              <path class="hero-cloud" d="M18 45h29a11 11 0 0 0 1-21.95A16 16 0 0 0 17 19.6 13 13 0 0 0 18 45Z"/>
-              <circle class="hero-download-bg" cx="44" cy="43" r="11"/>
-              <path class="hero-download" d="M44 36v12m-5-5 5 5 5-5"/>
-            </svg>
+          <div class="hero-heading">
+            <div class="hero-illustration" aria-hidden="true">
+              <svg viewBox="0 0 64 64">
+                <path class="hero-cloud" d="M18 45h29a11 11 0 0 0 1-21.95A16 16 0 0 0 17 19.6 13 13 0 0 0 18 45Z"/>
+                <circle class="hero-download-bg" cx="44" cy="43" r="11"/>
+                <path class="hero-download" d="M44 36v12m-5-5 5 5 5-5"/>
+              </svg>
+            </div>
+            <div class="hero-heading-copy">
+              <h2>添加下载任务</h2>
+              <p>粘贴下载链接或磁链，选择下载目标，剩下的交给 PikPak Bridge。</p>
+            </div>
           </div>
-          <h2>添加下载任务</h2>
-          <p>粘贴下载链接或磁链，选择下载目标，剩下的交给 PikPak Bridge。</p>
 
           <form id="taskForm" class="task-composer">
             <div class="source-field">
@@ -100,11 +104,15 @@
           <div class="quota-summary-main">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18h10a4.5 4.5 0 0 0 .3-8.99A6 6 0 0 0 5.3 8.2 5 5 0 0 0 7 18Z"/><path d="M12 10v6m-3-3 3 3 3-3"/></svg>
             <span class="quota-summary-label">云下载剩余</span>
-            <strong id="quotaRemaining" class="quota-summary-number">获取中…</strong>
+            <span class="quota-summary-value" aria-live="polite">
+              <strong id="quotaRemaining" class="quota-summary-number is-placeholder">获取中…</strong>
+              <span id="quotaUnit" class="quota-summary-unit" hidden>次</span>
+            </span>
           </div>
           <div class="quota-summary-meta">
-            <span id="quotaUpdated" class="quota-summary-updated">—</span>
             <span id="quotaStatus" class="quota-summary-status" aria-live="polite"></span>
+            <span id="quotaDivider" class="quota-meta-divider" aria-hidden="true" hidden></span>
+            <span id="quotaUpdated" class="quota-summary-updated">—</span>
             <button id="quotaRefreshBtn" class="quota-refresh-btn" type="button" aria-label="刷新云下载额度" title="刷新云下载额度">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 0-2 5"/></svg>
             </button>

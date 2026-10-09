@@ -1147,35 +1147,66 @@ function renderQuotaSummary(data) {
   lastQuotaSummary = data;
   const count = Number(data.counted_accounts || 0);
   const enabled = Number(data.enabled_accounts || 0);
+  const stale = Number(data.stale_accounts || 0);
+  const remaining = Number(data.remaining || 0);
   const number = $("quotaRemaining");
+  const unit = $("quotaUnit");
+  const status = $("quotaStatus");
+
   let label = "";
   let placeholder = false;
+  let historical = false;
+  let showUnit = false;
+  let note = "";
+  let severity = "";
+
   if (enabled === 0) {
     label = "未配置账号";
     placeholder = true;
   } else if (count > 0) {
-    label = String(data.remaining) + " 次";
-  } else if (Number(data.stale_accounts || 0) > 0) {
-    label = "上次剩余 " + data.stale_remaining + " 次";
-    placeholder = true;
+    label = String(remaining);
+    showUnit = true;
+    if (!data.complete) {
+      note = "部分账号未统计";
+      severity = "warning";
+    } else if (remaining === 0) {
+      note = "额度已用尽";
+      severity = "warning";
+    } else {
+      note = "额度已同步";
+      severity = "ok";
+    }
+  } else if (stale > 0) {
+    label = String(data.stale_remaining);
+    showUnit = true;
+    historical = true;
+    note = "上次额度 · 已过期";
+    severity = "warning";
   } else {
     label = data.refreshing ? "获取中…" : "暂无法获取";
     placeholder = true;
+    if (!data.refreshing) {
+      note = "额度不可用";
+      severity = "warning";
+    }
   }
   number.textContent = label;
   number.classList.toggle("is-placeholder", placeholder);
-  let note = "";
-  if (enabled > 0 && !data.complete) {
-    if (count > 0) note = "部分账号未统计";
-    else if (!data.refreshing) note = "额度不可用";
-  }
-  $("quotaStatus").textContent = note;
-  $("quotaStatus").classList.toggle("is-warning", Boolean(note));
+  number.classList.toggle("is-stale", historical);
+  number.classList.toggle("is-depleted", Boolean(data.complete && count > 0 && remaining === 0));
+  unit.hidden = !showUnit;
+
+  status.textContent = note;
+  status.title = enabled > 0
+    ? "已统计 " + count + " / " + enabled + " 个已启用账号" + (historical ? "；显示的是上次成功查询的额度" : "")
+    : "";
+  status.classList.toggle("is-ok", severity === "ok");
+  status.classList.toggle("is-warning", severity === "warning");
+  $("quotaDivider").hidden = !note;
   $("quotaUpdated").textContent = quotaUpdateTime(data.updated_at);
   $("quotaRefreshBtn").disabled = Boolean(data.refreshing);
   $("quotaRefreshBtn").classList.toggle("is-loading", Boolean(data.refreshing));
 }
-
 async function loadQuotaSummary() {
   if (quotaSummaryRequestBusy) return;
   if (!appConfigured) {
@@ -1186,11 +1217,15 @@ async function loadQuotaSummary() {
   try {
     renderQuotaSummary(await request("/api/v1/pikpak/quota-summary"));
   } catch (_) {
-    $("quotaStatus").textContent = "连接异常";
-    $("quotaStatus").classList.add("is-warning");
+    const status = $("quotaStatus");
+    status.textContent = "连接异常";
+    status.classList.remove("is-ok");
+    status.classList.add("is-warning");
+    $("quotaDivider").hidden = false;
     if (!lastQuotaSummary) {
       $("quotaRemaining").textContent = "暂无法获取";
       $("quotaRemaining").classList.add("is-placeholder");
+      $("quotaUnit").hidden = true;
     }
   } finally {
     quotaSummaryRequestBusy = false;
