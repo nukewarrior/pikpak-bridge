@@ -165,3 +165,10 @@ func (s *SQLite) DeleteHistoryTask(ctx context.Context, id string) error {
     _, err = s.db.ExecContext(ctx, "DELETE FROM tasks WHERE id=?", id)
     return err
 }
+
+func (s *SQLite) HasPendingCacheReclaim(ctx context.Context, accountID string) (bool, error) {
+    var v int
+    err := s.db.QueryRowContext(ctx, `SELECT 1 FROM pikpak_cache_entries WHERE account_id=? AND state='DELETING' LIMIT 1`,accountID).Scan(&v)
+    if errors.Is(err,sql.ErrNoRows) {return false,nil}
+    return v==1,err
+}

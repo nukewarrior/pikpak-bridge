@@ -18,6 +18,7 @@ type cancelStore interface {
  GetTask(context.Context, string) (domain.Task, error)
  ListDownloads(context.Context, string) ([]domain.Download, error)
  SaveTask(context.Context, *domain.Task, string, string) error
+ HasRetainedCache(context.Context, string, string) (bool, error)
 }
 
 type CancelOptions struct {
@@ -97,8 +98,12 @@ func (w *Canceller) cleanup(ctx context.Context, task *domain.Task) error {
  }
  if task.PikPakRootFileID != "" {
   if task.PikPakAccountID == "" { return w.retry(ctx, task, errors.New("PikPak 根文件 ID 存在但账号 ID 缺失")) }
-  if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
-   return w.retry(ctx, task, fmt.Errorf("删除 PikPak 任务根文件: %w", err))
+  retained, err := w.store.HasRetainedCache(ctx, task.PikPakAccountID, task.PikPakRootFileID)
+  if err != nil { return w.retry(ctx, task, err) }
+  if !retained {
+   if err := w.provider.DeletePermanently(ctx, task.PikPakAccountID, task.PikPakRootFileID); err != nil {
+    return w.retry(ctx, task, fmt.Errorf("删除 PikPak 任务根文件: %w", err))
+   }
   }
  }
  now := time.Now().UTC()

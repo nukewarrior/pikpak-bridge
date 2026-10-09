@@ -35,6 +35,7 @@ type Options struct {
 	RetryInterval           time.Duration
 	MaxRetry                int
 	MinFreeSpace            int64
+	CachePressure *CachePressure
 	AccountFailureThreshold int
 	AccountCooldown         time.Duration
 	Locks                   *TaskLocks
@@ -274,6 +275,13 @@ func (w *Worker) selectAndSubmit(ctx context.Context, task *domain.Task) error {
 		)
 	}
 
+    if w.options.CachePressure != nil {
+        for _, snapshot := range snapshots {
+            if snapshot.Enabled && snapshot.Healthy && snapshot.StorageFree < w.options.MinFreeSpace {
+                w.options.CachePressure.Mark(snapshot.ID)
+            }
+        }
+    }
 	selected, err := scheduler.SelectPikPakAccount(snapshots, w.options.MinFreeSpace, now)
 	if err != nil {
 		waitUntil := now.Add(w.options.RetryInterval)
@@ -376,6 +384,9 @@ func (w *Worker) submit(ctx context.Context, task *domain.Task, reserved bool) e
 		)
 		switch pikpak.KindOf(err) {
 		case pikpak.ErrorKindQuota, pikpak.ErrorKindStorage, pikpak.ErrorKindAuth, pikpak.ErrorKindCaptcha:
+            if pikpak.KindOf(err) == pikpak.ErrorKindStorage && w.options.CachePressure != nil {
+                w.options.CachePressure.Mark(task.PikPakAccountID)
+            }
 			task.PikPakAccountID = ""
 			task.PikPakTaskID = ""
 			task.PikPakRootFileID = ""
