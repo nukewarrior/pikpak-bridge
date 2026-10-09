@@ -2328,6 +2328,11 @@ function positionBridgeMetaProgress(badge) {
     badge.style.lineHeight = Math.min(14, height - 2) + 'px';
     badge.dataset.dense = height < 18 ? 'true' : 'false';
     badge.dataset.noTrack = height < 15 ? 'true' : 'false';
+    // A prior early measurement may have hidden the badge. Restore it once
+    // valid anchors are measurable, but never reveal an untracked gallery.
+    if(badge.dataset.state) {
+        badge.style.display = badge.dataset.state === 'completed' ? 'inline-block' : 'block';
+    }
 }
 function appendBridgeGalleryStatus(row, gid, fallbackHost) {
     const meta = row.querySelector('.gl3e');
