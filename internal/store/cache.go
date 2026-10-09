@@ -58,23 +58,39 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
     if err != nil && !errors.Is(err, sql.ErrNoRows) { return nil, err }
     if active>0 {
         if err==nil {return &existing,nil}
-        return nil,ErrDuplicate
+        // This branch is only reachable if a concurrent task becomes visible
+        // between the active check and the latest-history lookup.
+        return nil, ErrDuplicate
     }
-    if err == nil {
-        if !terminalTask(existing.Status) || !force {
-            return &existing, nil
+    known, err := s.LatestKnownCache(ctx, base)
+    if err!=nil { return nil,err }
+    if err==nil && !terminalTask(existing.Status) { return &existing,nil }
+    if !force {
+        if existing.ID!="" { return &existing,nil }
+        if known!=nil {
+            // A user can delete history while retaining cloud cache metadata.
+            // Still require explicit confirmation before replacing NAS files.
+            return &domain.Task{ID:known.TaskID,Status:domain.TaskCompleted,
+                Name:"已删除的下载历史（仍保留缓存记录）"},nil
         }
-        task.SourceKey = base + "#" + task.ID
-        // Reuse verified cloud cache when it belongs to the same exact source.
-        cache, err := s.LatestRetainedCache(ctx, base)
-        if err != nil { return nil, err }
-        if cache != nil {
-            task.PikPakAccountID = cache.AccountID
-            task.PikPakRootFileID = cache.RootFileID
-            task.Status = domain.TaskPikPakComplete
-        }
+        task.SourceKey=base
     } else {
-        task.SourceKey = base
+        // An explicit repeat always takes the private staging path, including
+        // when history was already deleted but its cache record still exists.
+        if existing.ID!="" || known!=nil {
+            task.SourceKey=base+"#"+task.ID
+        } else {
+            task.SourceKey=base
+        }
+    }
+    if strings.Contains(task.SourceKey, "#") {
+        retained, err:=s.LatestRetainedCache(ctx,base)
+        if err!=nil {return nil,err}
+        if retained!=nil {
+            task.PikPakAccountID=retained.AccountID
+            task.PikPakRootFileID=retained.RootFileID
+            task.Status=domain.TaskPikPakComplete
+        }
     }
     if err := s.CreateTask(ctx, *task); err != nil {
         if errors.Is(err, ErrDuplicate) {
@@ -84,6 +100,15 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
         return nil, err
     }
     return nil, nil
+}
+
+// LatestKnownCache includes reclaimed roots as a durable indication that the
+// source has been downloaded before. It is used only for duplicate warnings.
+func (s *SQLite) LatestKnownCache(ctx context.Context, base string) (*CacheEntry,error) {
+    row:=s.db.QueryRowContext(ctx,`SELECT account_id, root_file_id, source_key, task_id,
+        size_bytes, cached_at, state, last_error FROM pikpak_cache_entries
+        WHERE source_key=? ORDER BY cached_at DESC LIMIT 1`,base)
+    return scanCache(row)
 }
 
 func (s *SQLite) LatestRetainedCache(ctx context.Context, base string) (*CacheEntry, error) {
