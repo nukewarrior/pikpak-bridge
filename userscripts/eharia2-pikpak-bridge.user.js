@@ -1951,6 +1951,7 @@ class BridgeProgressMonitor {
                 view.kind === 'torrent' ? r.link === view.key : r.gid === view.key);
             if(!entries.length || !this.service) {
                 view.element.style.display = 'none';
+                delete view.element.dataset.state;
                 continue;
             }
             const running = entries.find(r => BRIDGE_ACTIVE.has(this.tasks.get(r.id)?.status));
