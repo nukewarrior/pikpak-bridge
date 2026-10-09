@@ -71,6 +71,9 @@ func (w *CacheCleaner) RunOnce(ctx context.Context) {
         pending,err:=w.store.HasPendingCacheReclaim(ctx,id)
         if err!=nil {slog.Warn("读取待清理缓存失败","account_id",id,"error",err);continue}
         pressure:=w.pressure.Needed(id)
+        // Treat an absent/zero quota limit as unknown unless PikPak actually
+        // reported storage exhaustion. Never evict solely on guessed free space.
+        if snapshot.StorageTotal<=0 && !pressure && !pending {continue}
         if snapshot.StorageFree>=w.minFree && !pressure && !pending {continue}
         for count:=0;count<50;count++ {
             if ctx.Err()!=nil {return}
