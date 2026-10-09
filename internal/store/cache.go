@@ -64,7 +64,7 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
     }
     known, err := s.LatestKnownCache(ctx, base)
     if err!=nil { return nil,err }
-    if err==nil && !terminalTask(existing.Status) { return &existing,nil }
+    if existing.ID!="" && !terminalTask(existing.Status) { return &existing,nil }
     if !force {
         if existing.ID!="" { return &existing,nil }
         if known!=nil {
@@ -77,11 +77,7 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
     } else {
         // An explicit repeat always takes the private staging path, including
         // when history was already deleted but its cache record still exists.
-        if existing.ID!="" || known!=nil {
-            task.SourceKey=base+"#"+task.ID
-        } else {
-            task.SourceKey=base
-        }
+        task.SourceKey=base+"#"+task.ID
     }
     if strings.Contains(task.SourceKey, "#") {
         retained, err:=s.LatestRetainedCache(ctx,base)
