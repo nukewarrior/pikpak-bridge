@@ -261,7 +261,7 @@ func (r *Runtime) prepare(cfg *config.Config) (*pikpak.Manager, *aria2.Registry,
 func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, registry *aria2.Registry, workers workerSet) {
 	workerCtx, cancel := context.WithCancel(r.parent)
 	wg := &sync.WaitGroup{}
-	wg.Add(4)
+	wg.Add(5)
 
 	r.cancel = cancel
 	r.workersWG = wg
@@ -285,6 +285,10 @@ func (r *Runtime) activateLocked(cfg *config.Config, provider *pikpak.Manager, r
 		defer wg.Done()
 		workers.canceller.Run(workerCtx)
 	}()
+    go func() {
+        defer wg.Done()
+        workers.cacheCleaner.Run(workerCtx)
+    }()
 }
 
 type workerSet struct {
@@ -292,6 +296,7 @@ type workerSet struct {
 	aria2     *worker.Aria2Worker
 	finalizer *worker.Finalizer
 	canceller *worker.Canceller
+    cacheCleaner *worker.CacheCleaner
 }
 
 func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider, backend aria2.Backend) (workerSet, error) {
@@ -345,6 +350,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 	}
 
 	locks := worker.NewTaskLocks()
+    cachePressure := worker.NewCachePressure()
 	return workerSet{
 		pikpak: worker.New(db, provider, worker.Options{
 			Locks: locks,
@@ -356,6 +362,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			RetryInterval:           retryInterval,
 			MaxRetry:                cfg.Scheduler.MaxRetry,
 			MinFreeSpace:            minFreeSpace,
+            CachePressure: cachePressure,
 			AccountFailureThreshold: cfg.Scheduler.AccountFailureThreshold,
 			AccountCooldown:         accountCooldown,
 		}),
@@ -377,6 +384,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			LocalDirs: localDirs,
 		}),
 		canceller: worker.NewCanceller(db, provider, backend, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
+        cacheCleaner: worker.NewCacheCleaner(db, provider, accountIDs, minFreeSpace, cachePressure),
 	}, nil
 }
 
