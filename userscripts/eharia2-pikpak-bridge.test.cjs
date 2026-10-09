@@ -1446,3 +1446,15 @@ test('declining repeat confirmation does not create a second Bridge task', async
     assert.equal(requests.filter(x=>x.method==='POST').length,1);
     assert.equal(button.value,'已取消');
 });
+
+test('script retries an existing failed Bridge task instead of creating another cloud task', async () => {
+    const {ctx,requests}=createHarness(req=>{
+        if(req.method!=='POST') throw Error('unexpected method');
+        req.onload({status:200,responseText:'{"id":"failed-old","status":"PIKPAK_COMPLETE"}'});
+    });
+    const result=await evaluate(ctx,"new PikPakBridgeClient('https://bridge.example.org').retryTask('failed-old')");
+    assert.equal(result.id,'failed-old');
+    assert.equal(result.status,'PIKPAK_COMPLETE');
+    assert.equal(requests[0].url,'https://bridge.example.org/api/v1/tasks/failed-old/retry');
+    assert.equal(requests.length,1);
+});

@@ -565,3 +565,51 @@ func TestCancelActiveTaskQueuesDurableCleanup(t *testing.T) {
 		t.Fatalf("cancelling task was revived: %s", got.Status)
 	}
 }
+
+func TestRetryFailedPikPakRetainsOwnedRemoteRoot(t *testing.T) {
+    db:=openTestStore(t)
+    now:=time.Now().UTC()
+    task:=domain.Task{
+        ID:"remote-retry", Source:"https://example.invalid/book", SourceType:"https",
+        SourceKey:"url:remote-retry",TargetID:"movies",TargetName:"Movies",
+        Aria2InstanceID:"nas",DownloadDir:"/downloads",Status:domain.TaskQueued,
+        CreatedAt:now,UpdatedAt:now,
+    }
+    if err:=db.CreateTask(context.Background(),task);err!=nil {t.Fatal(err)}
+    task.Status=domain.TaskPikPakFailed
+    task.PikPakAccountID="pp01"
+    task.PikPakTaskID="task-on-pikpak"
+    task.PikPakRootFileID="book-root"
+    if err:=db.SaveTask(context.Background(),&task,"pikpak.failed","old error");err!=nil {t.Fatal(err)}
+    httpapi:=New(db)
+    response:=httptest.NewRecorder()
+    httpapi.Handler().ServeHTTP(response,httptest.NewRequest(http.MethodPost,"/api/v1/tasks/"+task.ID+"/retry",nil))
+    if response.Code!=http.StatusOK {t.Fatalf("retry rejected: %d %s",response.Code,response.Body.String())}
+    got,err:=db.GetTask(context.Background(),task.ID)
+    if err!=nil {t.Fatal(err)}
+    if got.Status!=domain.TaskPikPakComplete || got.PikPakRootFileID!="book-root" || got.PikPakTaskID!="task-on-pikpak" {
+        t.Fatalf("PikPak remote reference lost on retry: %+v",got)
+    }
+}
+
+func TestRetryFailedPikPakWithoutRootBlocksUnsafeReset(t *testing.T) {
+    db:=openTestStore(t)
+    now:=time.Now().UTC()
+    task:=domain.Task{
+        ID:"unsafe-retry",Source:"https://example.invalid/book2",SourceType:"https",
+        SourceKey:"url:unsafe-retry",TargetID:"movies",TargetName:"Movies",
+        Aria2InstanceID:"nas",DownloadDir:"/downloads",Status:domain.TaskQueued,
+        CreatedAt:now,UpdatedAt:now,
+    }
+    if err:=db.CreateTask(context.Background(),task);err!=nil {t.Fatal(err)}
+    task.Status=domain.TaskPikPakFailed
+    task.PikPakAccountID="pp01"
+    task.PikPakTaskID="unresolved-task"
+    if err:=db.SaveTask(context.Background(),&task,"","");err!=nil {t.Fatal(err)}
+    server:=New(db)
+    response:=httptest.NewRecorder()
+    server.Handler().ServeHTTP(response,httptest.NewRequest(http.MethodPost,"/api/v1/tasks/"+task.ID+"/retry",nil))
+    if response.Code!=http.StatusConflict {t.Fatalf("expected safe rejection: %d %s",response.Code,response.Body.String())}
+    got,err:=db.GetTask(context.Background(),task.ID)
+    if err!=nil || got.PikPakTaskID!="unresolved-task" {t.Fatalf("remote reference discarded: %+v %v",got,err)}
+}
