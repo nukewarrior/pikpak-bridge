@@ -35,6 +35,7 @@ type Task struct {
 	TargetName      string     `json:"target_name"`
 	Aria2InstanceID string     `json:"aria2_instance_id"`
 	DownloadDir     string     `json:"download_dir"`
+	LocalDir        string     `json:"-"` // snapshot of the Bridge-mounted NAS path
 	Status          TaskStatus `json:"status"`
 
 	PikPakAccountID      string     `json:"pikpak_account_id,omitempty"`

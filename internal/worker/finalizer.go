@@ -27,7 +27,6 @@ type FinalizeOptions struct {
 	VerifySize     bool
 	CleanupEnabled bool
 	CleanupDelay   time.Duration
-	LocalDirs map[string]string
 	Locks          *TaskLocks
 }
 
@@ -154,7 +153,7 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 	task.RetryCount = 0
 	task.Error = ""
 	if strings.Contains(task.SourceKey, "#") {
-		if err := PromoteLocalDownloads(w.options.LocalDirs[task.TargetID], task.ID, downloads); err != nil {
+		if err := PromoteLocalDownloads(task.LocalDir, task.ID, downloads); err != nil {
 			return w.failVerify(ctx, task, fmt.Errorf("安全替换 NAS 文件失败: %w", err))
 		}
 	}

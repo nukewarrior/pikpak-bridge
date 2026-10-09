@@ -147,9 +147,14 @@ func (s *SQLite) init(ctx context.Context) error {
 		}
 	}
 	// Idempotent migration for databases created before deferred history deletion.
-    if _, err := s.db.ExecContext(ctx, "ALTER TABLE tasks ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0"); err != nil &&
-        !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-        return fmt.Errorf("migrate pending_delete: %w", err)
+    for _,migration := range []struct {name,sql string}{
+        {"pending_delete","ALTER TABLE tasks ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0"},
+        {"local_dir","ALTER TABLE tasks ADD COLUMN local_dir TEXT NOT NULL DEFAULT ''"},
+    } {
+        if _,err:=s.db.ExecContext(ctx,migration.sql);err!=nil &&
+            !strings.Contains(strings.ToLower(err.Error()),"duplicate column") {
+            return fmt.Errorf("migrate %s: %w",migration.name,err)
+        }
     }
     return nil
 }
@@ -159,7 +164,7 @@ const taskColumns = `id, source, source_type, source_key, name,
 	pikpak_account_id, pikpak_task_id, pikpak_root_file_id,
 	pikpak_phase, pikpak_progress, pikpak_last_activity_at,
 	retry_count, manual_retry_count, next_attempt_at, error, created_at, updated_at, completed_at,
-	cancel_pending_submission`
+	cancel_pending_submission, local_dir`
 
 func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 	_, err := s.db.ExecContext(ctx, `
@@ -167,8 +172,8 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
 			id, source, source_type, source_key, name,
 			target_id, target_name, aria2_instance_id, download_dir, status,
             pikpak_account_id, pikpak_root_file_id,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			created_at, updated_at, local_dir
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		task.ID,
 		task.Source,
@@ -184,6 +189,7 @@ func (s *SQLite) CreateTask(ctx context.Context, task domain.Task) error {
         task.PikPakRootFileID,
 		task.CreatedAt.UTC().Format(time.RFC3339Nano),
 		task.UpdatedAt.UTC().Format(time.RFC3339Nano),
+        task.LocalDir,
 	)
 	if err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "unique") {
@@ -830,6 +836,7 @@ func scan(row scanner) (domain.Task, error) {
 		&updatedAt,
 		&completedAt,
 		&cancelPendingSubmission,
+        &task.LocalDir,
 	)
 	if err != nil {
 		return domain.Task{}, err
