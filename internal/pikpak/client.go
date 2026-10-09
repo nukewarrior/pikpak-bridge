@@ -50,6 +50,9 @@ type Client struct {
 	deviceID     string
 	sessionDir   string
 	httpClient   *http.Client
+	// A read-only credential snapshot may issue parallel file GET requests.
+	// Token refresh is delegated to the account's serialized client.
+	disableRefresh bool
 }
 
 func NewClient(username, password, sessionDir string) *Client {
@@ -363,7 +366,7 @@ func (c *Client) doJSONAttempt(ctx context.Context, method, endpoint string, bod
 	}
 	code, message := apiError(data)
 	if code != 0 || message != "" || resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if retry && (code == 4121 || code == 4122 || code == 16 || resp.StatusCode == http.StatusUnauthorized) {
+		if retry && !c.disableRefresh && (code == 4121 || code == 4122 || code == 16 || resp.StatusCode == http.StatusUnauthorized) {
 			if err := c.refreshAccessToken(ctx); err != nil {
 				return err
 			}
@@ -372,7 +375,7 @@ func (c *Client) doJSONAttempt(ctx context.Context, method, endpoint string, bod
 			}
 			return c.doJSONAttempt(ctx, method, endpoint, body, out, false)
 		}
-		if retry && code == 9 {
+		if retry && !c.disableRefresh && code == 9 {
 			if err := c.refreshCaptcha(ctx, method, endpoint); err != nil {
 				return err
 			}
@@ -435,6 +438,9 @@ func (c *Client) rawJSON(ctx context.Context, method, endpoint string, body, out
 func (c *Client) ensureAccess(ctx context.Context) error {
 	if c.accessToken != "" && time.Now().Unix() < c.expiresAt {
 		return nil
+	}
+	if c.disableRefresh {
+		return &Error{Kind: ErrorKindAuth, Op: "download", Message: "session expired"}
 	}
 	if c.refreshToken != "" {
 		if err := c.refreshAccessToken(ctx); err == nil {
