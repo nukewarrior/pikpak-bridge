@@ -485,6 +485,8 @@ func (s *Server) deleteHistoryTask(w http.ResponseWriter, r *http.Request) {
         w.WriteHeader(http.StatusNoContent)
     case errors.Is(err, sql.ErrNoRows):
         writeError(w, http.StatusNotFound, "task not found")
+    case errors.Is(err, store.ErrCleanupScheduled):
+        writeJSON(w, http.StatusAccepted, map[string]string{"status":"CANCELLING","message":"正在清理远端资源，完成后删除历史记录"})
     case errors.Is(err, store.ErrTaskNotTerminal), errors.Is(err, store.ErrUnsafeDeletion):
         writeError(w, http.StatusConflict, err.Error())
     default:

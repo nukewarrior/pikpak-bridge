@@ -79,7 +79,8 @@ func (s *SQLite) init(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			completed_at TEXT,
-			cancel_pending_submission INTEGER NOT NULL DEFAULT 0
+			cancel_pending_submission INTEGER NOT NULL DEFAULT 0,
+            pending_delete INTEGER NOT NULL DEFAULT 0
 		);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_created_at ON tasks(created_at DESC);`,
@@ -145,7 +146,12 @@ func (s *SQLite) init(ctx context.Context) error {
 			return fmt.Errorf("database init: %w", err)
 		}
 	}
-	return nil
+	// Idempotent migration for databases created before deferred history deletion.
+    if _, err := s.db.ExecContext(ctx, "ALTER TABLE tasks ADD COLUMN pending_delete INTEGER NOT NULL DEFAULT 0"); err != nil &&
+        !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+        return fmt.Errorf("migrate pending_delete: %w", err)
+    }
+    return nil
 }
 
 const taskColumns = `id, source, source_type, source_key, name,

@@ -953,8 +953,8 @@ async function historyTaskAction(id, action, button) {
   button.disabled = true;
   try {
     if(action === "delete") {
-      await request(`/api/v1/tasks/${encodeURIComponent(id)}`, {method:"DELETE"});
-      toast("历史记录已删除，NAS 文件和云端缓存均已保留");
+      const result = await request(`/api/v1/tasks/${encodeURIComponent(id)}`, {method:"DELETE"});
+      toast(result.status === "CANCELLING" ? "正在清理失败任务占用的资源，稍后自动移除记录" : "历史记录已删除，NAS 文件和云端缓存均已保留");
     } else if(action === "redownload") {
       await request(`/api/v1/tasks/${encodeURIComponent(id)}/redownload`, {method:"POST"});
       toast("已创建新的下载任务");
@@ -963,9 +963,11 @@ async function historyTaskAction(id, action, button) {
       toast("失败任务已重新开始");
     }
     await Promise.all([loadTasks(),loadHistoryTasks()]);
+    return true;
   } catch(error) {
     toast("操作失败：" + error.message, true);
     button.disabled = false;
+    return false;
   }
 }
 
@@ -1110,8 +1112,8 @@ async function openTask(id) {
     for(const [name,action] of [["redownloadTaskBtn","redownload"],["deleteTaskBtn","delete"]]) {
       const button = $(name);
       if(button) button.addEventListener("click", async () => {
-        await historyTaskAction(id,action,button);
-        if(action==="delete") $("taskDialog").close();
+        const success = await historyTaskAction(id,action,button);
+        if(success && action==="delete") $("taskDialog").close();
       });
     }
     const retryButton = $("retryTaskBtn");
