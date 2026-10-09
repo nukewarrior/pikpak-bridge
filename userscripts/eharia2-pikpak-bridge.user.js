@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.16
+// @version      1.3.17
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -391,15 +391,43 @@ const STYLE = `
     white-space: normal;
     text-align: left;
 }
-/* Extended-list metadata (.gl3e) uses positioned children; render in the content cell instead. */
-.gl4e > .aria2helper-bridge-progress {
-    position: static;
-    float: none;
-    clear: both;
-    width: fit-content;
-    max-width: calc(100% - 8px);
-    margin: 8px 4px 4px;
-    vertical-align: top;
+/* Extended list: the badge occupies only the measured gap between category and date.
+ * It is appended after the native children so their nth-child selectors keep working. */
+.gl3e > .aria2helper-bridge-progress-meta {
+    position: absolute !important;
+    box-sizing: border-box;
+    z-index: 1;
+    margin: 0 !important;
+    padding: 0 4px !important;
+    min-width: 0;
+    max-width: none;
+    overflow: hidden;
+    white-space: nowrap;
+    text-align: center;
+    font: 10px/1.2 system-ui, sans-serif;
+    border-radius: 3px;
+}
+.gl3e > .aria2helper-bridge-progress-meta .aria2helper-bridge-progress-label {
+    display: block;
+    line-height: inherit;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+.gl3e > .aria2helper-bridge-progress-meta .aria2helper-bridge-progress-track {
+    position: absolute;
+    left: 3px;
+    right: 3px;
+    bottom: 0;
+    height: 2px;
+    margin: 0;
+}
+.gl3e > .aria2helper-bridge-progress-meta[data-dense="true"] .aria2helper-bridge-progress-track {
+    display: none !important;
+}
+.gl3e > .aria2helper-bridge-progress-meta[data-state="failed"] {
+    background: rgba(165, 54, 46, 0.22);
 }
 .glname .aria2helper-bridge-progress { margin: 4px 0; }
 `;
@@ -1927,6 +1955,7 @@ class BridgeProgressMonitor {
             const task = this.tasks.get(selected.id);
             const progress = task ? bridgeProgressOf(task, this.downloads.get(selected.id) || []) : null;
             const isCompleted = progress?.state === 'completed';
+            const isMeta = view.element.classList.contains('aria2helper-bridge-progress-meta');
             // Gallery cells can be narrow, so show errors there in the tooltip instead of the inline label.
             const errorHint = progress?.error && view.kind === 'torrent' ?
                 ' · ' + progress.error.slice(0, 48) + (progress.error.length > 48 ? '…' : '') : '';
@@ -1935,12 +1964,23 @@ class BridgeProgressMonitor {
                     ' (' + entries.length + '项)' : '') :
                 (view.kind === 'gallery' ? 'PikPak (' + entries.length + '项) · ' : 'PikPak · ') +
                     (progress ? progress.label : '查询任务中…') + errorHint;
+            if(isMeta && !isCompleted) {
+                const state = String(task?.status || '');
+                const shortPhase = progress?.state === 'failed' ? '下载失败' :
+                    state === 'PIKPAK_RUNNING' ? '云下载中' :
+                    state === 'ARIA2_DOWNLOADING' ? 'Aria2 下载中' :
+                    (BRIDGE_LABELS[state] || '查询中');
+                view.label.textContent = (progress?.state === 'failed' ? '⚠ ' : '') +
+                    'PikPak · ' + shortPhase +
+                    (progress?.percent == null ? '' : ' ' + progress.percent.toFixed(0) + '%');
+            }
             view.element.dataset.state = progress?.state || 'active';
             view.element.style.display = isCompleted ? 'inline-block' : 'block';
             view.element.title = progress?.error ?
                 progress.label + '：' + progress.error : view.label.textContent;
             view.track.style.display = isCompleted || progress?.percent == null ? 'none' : 'block';
             view.fill.style.width = progress?.percent == null ? '0%' : progress.percent.toFixed(2) + '%';
+            if(isMeta) positionBridgeMetaProgress(view.element);
         }
     }
     schedule(delay = 5000) {
@@ -2252,10 +2292,56 @@ const TOKEN = Tool.urlGetToken(window.location.href);
 let ariaClient;
 const bridgeProgressMonitor = new BridgeProgressMonitor();
 
-// Extended gallery metadata (.gl3e) is positioned and must not host flow-based progress widgets.
+/* Keep the site's category/date/ratings as the first native children of .gl3e.
+ * Changing their child indices breaks existing CSS and other user scripts. */
+function positionBridgeMetaProgress(badge) {
+    const meta = badge.parentNode;
+    if(!meta || !meta.classList?.contains('gl3e')) return;
+    const category = meta.children[0];
+    const date = meta.children[1];
+    if(!category || !date || typeof category.getBoundingClientRect !== 'function' ||
+        typeof date.getBoundingClientRect !== 'function') {
+        badge.style.display = 'none';
+        return;
+    }
+    const categoryRect = category.getBoundingClientRect();
+    const dateRect = date.getBoundingClientRect();
+    const metaRect = meta.getBoundingClientRect();
+    const gap = dateRect.top - categoryRect.bottom;
+    const height = Math.min(20, Math.floor(gap - 2));
+    const left = categoryRect.left - metaRect.left;
+    const width = Math.min(categoryRect.width, metaRect.width - left - 3);
+    // Fail closed instead of painting across the category or date at unusual zoom levels.
+    if(!Number.isFinite(gap) || height < 13 || width < 75) {
+        badge.style.display = 'none';
+        return;
+    }
+    badge.style.top = Math.round(categoryRect.bottom - metaRect.top + (gap - height) / 2) + 'px';
+    badge.style.left = Math.round(left) + 'px';
+    badge.style.width = Math.floor(width) + 'px';
+    badge.style.height = height + 'px';
+    badge.style.lineHeight = Math.min(14, height - 2) + 'px';
+    badge.dataset.dense = height < 18 ? 'true' : 'false';
+}
 function appendBridgeGalleryStatus(row, gid, fallbackHost) {
-    const contentHost = row.querySelector('.gl4e');
-    (contentHost || fallbackHost).appendChild(bridgeProgressMonitor.watchGallery(gid));
+    const meta = row.querySelector('.gl3e');
+    const badge = bridgeProgressMonitor.watchGallery(gid);
+    if(meta && meta.children.length >= 2) {
+        badge.classList.add('aria2helper-bridge-progress-meta');
+        const position = typeof window.getComputedStyle === 'function' ?
+            window.getComputedStyle(meta).position : meta.style.position;
+        if(!position || position === 'static') meta.style.position = 'relative';
+        // Append last: no change to category/date/native child indices.
+        meta.appendChild(badge);
+        positionBridgeMetaProgress(badge);
+    } else fallbackHost.appendChild(badge);
+}
+if(typeof window.addEventListener === 'function') {
+    let bridgeMetaResizeTimer = 0;
+    window.addEventListener('resize', () => {
+        clearTimeout(bridgeMetaResizeTimer);
+        bridgeMetaResizeTimer = setTimeout(() => bridgeProgressMonitor.render(), 120);
+    });
 }
 
 console.log({GID, TOKEN});
