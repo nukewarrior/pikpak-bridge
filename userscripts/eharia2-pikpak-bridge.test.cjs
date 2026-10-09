@@ -1387,10 +1387,17 @@ test('expanded gallery status fits between native category and date without shif
     dateTop=57;
     evaluate(ctx,'bridgeProgressMonitor.render()');
     assert.equal(badge.style.display,'none');
+    // The next animation frame can measure the layout even when no further
+    // task polling occurs. It must restore a tracked badge without render().
     dateTop=66;
-    evaluate(ctx,'bridgeProgressMonitor.render()');
+    ctx.testBadge=badge;
+    evaluate(ctx,'positionBridgeMetaProgress(testBadge)');
     assert.equal(badge.style.display,'block');
     assert.equal(badge.style.height,'19px');
+    evaluate(ctx,"bridgeProgressMonitor.tasks.set('task-meta',{status:'COMPLETED'})");
+    evaluate(ctx,'bridgeProgressMonitor.render()');
+    assert.equal(badge.style.display,'inline-block');
+    assert.equal(badge.children[1].style.display,'none');
 
     const fallback=doc.createElement('td');
     ctx.compact={querySelector() {return null;}};
