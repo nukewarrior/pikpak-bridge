@@ -141,7 +141,6 @@ type setupTarget struct {
 	Name            string `json:"name"`
 	Aria2InstanceID string `json:"aria2_instance"`
 	Dir             string `json:"dir"`
-	LocalDir        string `json:"local_dir"`
 	Default         bool   `json:"default"`
 	Enabled         *bool  `json:"enabled,omitempty"`
 }
@@ -203,7 +202,6 @@ func (s *Server) completeSetup(w http.ResponseWriter, r *http.Request) {
 			Name:            strings.TrimSpace(target.Name),
 			Aria2InstanceID: strings.TrimSpace(target.Aria2InstanceID),
 			Dir:             strings.TrimSpace(target.Dir),
-            LocalDir:        strings.TrimSpace(target.LocalDir),
 			Default:         target.Default,
 			Enabled:         target.Enabled,
 		})
@@ -283,11 +281,7 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input,
 		return
 	}
 
-	if force && strings.TrimSpace(target.LocalDir) == "" {
-        writeError(w, http.StatusConflict, "重新下载并安全替换需要为所选目标配置 local_dir 并挂载 NAS 下载目录")
-        return
-    }
-    n, err := domain.NormalizeSource(input)
+	n, err := domain.NormalizeSource(input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -308,7 +302,6 @@ func (s *Server) createFromSource(w http.ResponseWriter, r *http.Request, input,
 		TargetName:      target.Name,
 		Aria2InstanceID: target.Aria2InstanceID,
 		DownloadDir:     target.Dir,
-		LocalDir:        target.LocalDir,
 		Status:          domain.TaskQueued,
 		CreatedAt:       now,
 		UpdatedAt:       now,
