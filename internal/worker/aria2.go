@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -250,10 +251,14 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if err != nil {
 		return w.retryDownload(ctx, download, err)
 	}
+	outputDir := task.DownloadDir
+	if strings.Contains(task.SourceKey, "#") {
+		outputDir = path.Join(task.DownloadDir, ".pikpak-bridge-staging", task.ID)
+	}
 	gid, err := w.backend.Add(
 		ctx,
 		download.Aria2InstanceID,
-		task.DownloadDir,
+		outputDir,
 		uri,
 		download.Aria2GID,
 		download.RelativePath,

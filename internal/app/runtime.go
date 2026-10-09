@@ -335,6 +335,10 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 		return workerSet{}, fmt.Errorf("pikpak.min_free_space: %w", err)
 	}
 
+	localDirs := make(map[string]string)
+	for _, target := range cfg.Targets {
+		if target.LocalDir != "" { localDirs[target.ID] = target.LocalDir }
+	}
 	accountIDs := make([]string, 0, len(cfg.PikPak.Accounts))
 	for _, account := range cfg.PikPak.Accounts {
 		accountIDs = append(accountIDs, account.ID)
@@ -370,6 +374,7 @@ func buildWorkers(cfg *config.Config, db *store.SQLite, provider pikpak.Provider
 			VerifySize:     cfg.Cleanup.VerifySize,
 			CleanupEnabled: cfg.Cleanup.Enabled,
 			CleanupDelay:   cleanupDelay,
+			LocalDirs: localDirs,
 		}),
 		canceller: worker.NewCanceller(db, provider, backend, worker.CancelOptions{Locks: locks, WorkerInterval: workerInterval, RetryInterval: retryInterval}),
 	}, nil
