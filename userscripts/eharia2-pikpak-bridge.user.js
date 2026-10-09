@@ -2345,7 +2345,12 @@ function appendBridgeGalleryStatus(row, gid, fallbackHost) {
         if(typeof window.requestAnimationFrame === 'function') {
             window.requestAnimationFrame(() => positionBridgeMetaProgress(badge));
         }
-    } else fallbackHost.appendChild(badge);
+    } else {
+        // Never append a flowing widget to extended-list metadata: that would
+        // recreate the original overlap if a site variant changes its markup.
+        const safeHost = row.querySelector('.gl4e') || fallbackHost;
+        if(safeHost !== meta) safeHost.appendChild(badge);
+    }
 }
 if(typeof window.addEventListener === 'function') {
     let bridgeMetaResizeTimer = 0;
