@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/nukewarrior/pikpak-bridge/internal/domain"
@@ -152,11 +151,6 @@ func (w *Finalizer) verify(ctx context.Context, task *domain.Task) error {
 
 	task.RetryCount = 0
 	task.Error = ""
-	if strings.Contains(task.SourceKey, "#") {
-		if err := PromoteLocalDownloads(task.LocalDir, task.ID, downloads); err != nil {
-			return w.failVerify(ctx, task, fmt.Errorf("安全替换 NAS 文件失败: %w", err))
-		}
-	}
 	if err := w.store.RecordRetainedCache(ctx, task, total); err != nil {
 		return w.failVerify(ctx, task, fmt.Errorf("保存 PikPak 云端缓存引用失败: %w", err))
 	}

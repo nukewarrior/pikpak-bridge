@@ -15,6 +15,7 @@ import (
 type fakeAria2 struct {
 	added         map[string]bool
 	addCalls      int
+    overwriteCalls []bool
 	tellStatusErr error
 	statusByGID   map[string]aria2.Status
 	forgetCalls   int
@@ -30,8 +31,9 @@ func (f *fakeAria2) Snapshot(context.Context, string) (aria2.InstanceSnapshot, e
 		ID: "a1", Name: "aria2", Enabled: true, Healthy: true,
 	}, nil
 }
-func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string) (string, error) {
+func (f *fakeAria2) Add(_ context.Context, instanceID, baseDir, uri, gid, relativePath string, overwrite bool) (string, error) {
 	f.addCalls++
+    f.overwriteCalls=append(f.overwriteCalls,overwrite)
 	if uri == "" || instanceID != "a1" || baseDir != "/downloads/movies" || relativePath == "" {
 		return "", errors.New("bad add args")
 	}

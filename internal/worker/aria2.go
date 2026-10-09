@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -251,18 +250,11 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 	if err != nil {
 		return w.retryDownload(ctx, download, err)
 	}
-	outputDir := task.DownloadDir
-	if strings.Contains(task.SourceKey, "#") {
-		outputDir = path.Join(task.DownloadDir, ".pikpak-bridge-staging", task.ID)
-	}
-	gid, err := w.backend.Add(
-		ctx,
-		download.Aria2InstanceID,
-		outputDir,
-		uri,
-		download.Aria2GID,
-		download.RelativePath,
-	)
+    overwrite := strings.Contains(task.SourceKey, "#")
+    gid, err := w.backend.Add(
+        ctx, download.Aria2InstanceID, task.DownloadDir, uri,
+        download.Aria2GID, download.RelativePath, overwrite,
+    )
 	if err != nil {
 		if status, checkErr := w.backend.TellStatus(ctx, download.Aria2InstanceID, download.Aria2GID); checkErr == nil {
 			return w.applyStatus(ctx, download, status)
@@ -277,6 +269,7 @@ func (w *Aria2Worker) submitDownload(ctx context.Context, task *domain.Task, dow
 		"aria2_instance_id", download.Aria2InstanceID,
 		"gid", gid,
 		"path", download.RelativePath,
+        "overwrite", overwrite,
 	)
 	download.Status = domain.DownloadSubmitted
 	download.RetryCount = 0
