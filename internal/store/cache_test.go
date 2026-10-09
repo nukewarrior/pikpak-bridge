@@ -78,3 +78,35 @@ func TestFailedHistoryDeletionSchedulesRecoverableCleanup(t *testing.T) {
  if err:=db.DeleteCompletedPendingHistory(ctx,task.ID);err!=nil {t.Fatal(err)}
  if _,err:=db.GetTask(ctx,task.ID);!errors.Is(err,sql.ErrNoRows){t.Fatalf("failed to purge: %v",err)}
 }
+
+func TestHistoryDeletedStillRequiresConfirmationAndReusesCache(t *testing.T) {
+    ctx:=context.Background()
+    db,err:=Open(filepath.Join(t.TempDir(),"state.db"))
+    if err!=nil {t.Fatal(err)}
+    defer db.Close()
+    old:=cacheTestTask("old","DDDD")
+    old.LocalDir="/nas/pikpak"
+    if err:=db.CreateTask(ctx,old);err!=nil {t.Fatal(err)}
+    old.Status=domain.TaskCompleted
+    old.PikPakAccountID="acc1"; old.PikPakRootFileID="cached-root"
+    if err:=db.SaveTask(ctx,&old,"","");err!=nil {t.Fatal(err)}
+    if err:=db.RecordRetainedCache(ctx,&old,800);err!=nil {t.Fatal(err)}
+    if err:=db.DeleteHistoryTask(ctx,old.ID);err!=nil {t.Fatal(err)}
+
+    unconfirmed:=cacheTestTask("unconfirmed","DDDD")
+    oldTask,err:=db.CreateTaskFromSource(ctx,&unconfirmed,false)
+    if err!=nil || oldTask==nil || oldTask.Status!=domain.TaskCompleted {
+        t.Fatalf("expected download warning from cache tombstone: %+v %v",oldTask,err)
+    }
+
+    again:=cacheTestTask("again","DDDD")
+    again.LocalDir="/nas/pikpak"
+    duplicate,err:=db.CreateTaskFromSource(ctx,&again,true)
+    if err!=nil || duplicate!=nil {t.Fatalf("force repeat: %+v %v",duplicate,err)}
+    if again.Status!=domain.TaskPikPakComplete || again.PikPakRootFileID!="cached-root" {
+        t.Fatalf("expected cached root: %+v",again)
+    }
+    if again.SourceKey=="btih:DDDD" {t.Fatal("repeat without history must stage safely")}
+    got,err:=db.GetTask(ctx,again.ID)
+    if err!=nil || got.LocalDir!="/nas/pikpak" {t.Fatalf("local NAS mount not snapshotted: %+v %v",got,err)}
+}
