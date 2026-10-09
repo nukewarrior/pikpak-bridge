@@ -48,20 +48,16 @@ func (s *SQLite) CreateTaskFromSource(ctx context.Context, task *domain.Task, fo
     base := sourceIdentity(task.SourceKey)
     // Check all attempts: a newer finished attempt must not hide an older
     // still-active attempt of this exact BTIH/source identity.
-    var active int
-    err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks
-       WHERE (source_key=? OR substr(source_key,1,length(?)+1)=? || '#')
-         AND status NOT IN ('COMPLETED','CANCELLED','PIKPAK_FAILED','ARIA2_FAILED','VERIFY_FAILED','CLEANUP_FAILED')`,
-         base,base,base).Scan(&active)
-    if err!=nil {return nil,err}
+    activeTask, activeErr := scan(s.db.QueryRowContext(ctx,
+        "SELECT "+taskColumns+` FROM tasks WHERE
+          (source_key=? OR substr(source_key,1,length(?)+1)=? || '#')
+          AND status NOT IN ('COMPLETED','CANCELLED','PIKPAK_FAILED',
+                             'ARIA2_FAILED','VERIFY_FAILED','CLEANUP_FAILED')
+          ORDER BY created_at DESC, id DESC LIMIT 1`,base,base,base))
+    if activeErr==nil {return &activeTask,nil}
+    if !errors.Is(activeErr,sql.ErrNoRows) {return nil,activeErr}
     existing, err := s.GetTaskBySourceKey(ctx, base)
     if err != nil && !errors.Is(err, sql.ErrNoRows) { return nil, err }
-    if active>0 {
-        if err==nil {return &existing,nil}
-        // This branch is only reachable if a concurrent task becomes visible
-        // between the active check and the latest-history lookup.
-        return nil, ErrDuplicate
-    }
     known, err := s.LatestKnownCache(ctx, base)
     if err!=nil { return nil,err }
     if existing.ID!="" && !terminalTask(existing.Status) { return &existing,nil }
