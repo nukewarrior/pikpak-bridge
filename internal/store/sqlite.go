@@ -879,6 +879,10 @@ func (s *SQLite) ActiveResourceReferences(ctx context.Context) ([]string, []stri
 		SELECT DISTINCT pikpak_account_id, aria2_instance_id
 		FROM tasks
 		WHERE status NOT IN (?, ?, ?, ?, ?, ?)
+        UNION
+        SELECT account_id, '' AS aria2_instance_id
+        FROM pikpak_cache_entries
+        WHERE state IN ('RETAINED','DELETING','ERROR')
 	`,
 		string(domain.TaskCompleted),
 		string(domain.TaskCancelled),
