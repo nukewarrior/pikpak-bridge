@@ -30,6 +30,27 @@ type Backend interface {
 	Forget(ctx context.Context, instanceID, gid string) error
 }
 
+// BatchBackend is optional so existing single-file backends remain compatible.
+// Results have the same order as the requested files, including partial failures.
+type AddRequest struct {
+	URI          string
+	GID          string
+	RelativePath string
+	Overwrite    bool
+}
+type AddResult struct {
+	GID string
+	Err error
+}
+type StatusResult struct {
+	Status Status
+	Err    error
+}
+type BatchBackend interface {
+	AddBatch(context.Context, string, string, []AddRequest) ([]AddResult, error)
+	TellStatusBatch(context.Context, string, []string) ([]StatusResult, error)
+}
+
 type registryInstance struct {
 	id        string
 	name      string
@@ -112,23 +133,64 @@ func (r *Registry) Add(ctx context.Context, instanceID, baseDir, uri, gid, relat
 	if err != nil {
 		return "", err
 	}
+	return instance.client.AddURIWithOptions(ctx, uri, addOptions(dir, out, gid, overwrite))
+}
+
+// Options are identical for single-file and batch submissions.
+func addOptions(dir, out, gid string, overwrite bool) map[string]string {
 	options := map[string]string{
-		"gid":                gid,
-		"out":                out,
-		"continue":           "true",
-		"auto-file-renaming": "false",
-		"max-tries":          "1",
-		"remote-time":        "false", // Use local file modification time instead of HTTP Last-Modified.
+		"gid": gid, "out": out, "continue": "true",
+		"auto-file-renaming": "false", "max-tries": "1",
+		"remote-time": "false",
 	}
-    if overwrite {
-        // Confirmed repeat downloads go straight to the final aria2 directory.
-        options["continue"] = "false"
-        options["allow-overwrite"] = "true"
-    }
-    if dir != "" {
-        options["dir"] = dir
-    }
-    return instance.client.AddURIWithOptions(ctx, uri, options)
+	if overwrite {
+		options["continue"] = "false"
+		options["allow-overwrite"] = "true"
+	}
+	if dir != "" { options["dir"] = dir }
+	return options
+}
+
+func (r *Registry) AddBatch(ctx context.Context, instanceID, baseDir string, requests []AddRequest) ([]AddResult, error) {
+	instance, err := r.enabled(instanceID)
+	if err != nil { return nil, err }
+	results := make([]AddResult, len(requests))
+	calls := make([]methodCall, 0, len(requests))
+	indexes := make([]int, 0, len(requests))
+	for i, request := range requests {
+		dir, out, err := destination(baseDir, request.RelativePath)
+		if err != nil {
+			results[i].Err = err
+			continue
+		}
+		calls = append(calls, methodCall{MethodName: "aria2.addUri", Params: []any{
+			[]string{request.URI}, addOptions(dir, out, request.GID, request.Overwrite),
+		}})
+		indexes = append(indexes, i)
+	}
+	raw, err := instance.client.multiCall(ctx, calls)
+	if err != nil { return nil, err }
+	for i, response := range raw {
+		index := indexes[i]
+		results[index].Err = parseMultiResult(response, &results[index].GID)
+	}
+	return results, nil
+}
+
+func (r *Registry) TellStatusBatch(ctx context.Context, instanceID string, gids []string) ([]StatusResult, error) {
+	instance, err := r.enabled(instanceID)
+	if err != nil { return nil, err }
+	calls := make([]methodCall, 0, len(gids))
+	for _, gid := range gids {
+		calls = append(calls, methodCall{MethodName: "aria2.tellStatus", Params: []any{gid}})
+	}
+	raw, err := instance.client.multiCall(ctx, calls)
+	if err != nil { return nil, err }
+	results := make([]StatusResult, len(raw))
+	for i, response := range raw {
+		results[i].Err = parseMultiResult(response, &results[i].Status)
+	}
+	return results, nil
 }
 
 func (r *Registry) TellStatus(ctx context.Context, instanceID, gid string) (Status, error) {
