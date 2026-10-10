@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         EhPikPakAria2下载助手
 // @namespace    https://github.com/nukewarrior/pikpak-bridge/userscripts
-// @version      1.3.20
+// @version      1.3.21
 // @description  保留 EhAria2 功能，新增将 E-Hentai/ExHentai 磁链推送至 pikpak-bridge
 // @author       xioxin, SchneeHertz; pikpak-bridge contributors
 // @homepage     https://github.com/nukewarrior/pikpak-bridge
@@ -831,6 +831,24 @@ const BRIDGE_TARGET_STYLE = `
     border-radius: 5px;
     font-size: 14px;
 }
+/* Override the different global select themes on E-Hentai and ExHentai. */
+.aria2helper-bridge-overlay .aria2helper-bridge-dialog select.aria2helper-bridge-target-select {
+    color-scheme: light !important;
+    appearance: auto !important;
+    background: #fff !important;
+    color: #222 !important;
+    border: 1px solid #aaa !important;
+    border-radius: 5px !important;
+    box-shadow: none !important;
+}
+.aria2helper-bridge-overlay .aria2helper-bridge-dialog select.aria2helper-bridge-target-select option {
+    background: #fff !important;
+    color: #222 !important;
+}
+.aria2helper-bridge-overlay .aria2helper-bridge-dialog select.aria2helper-bridge-target-select:focus-visible {
+    outline: 2px solid #168579 !important;
+    outline-offset: 2px;
+}
 .aria2helper-aria2-dir-dialog {
     width: min(560px, 100%);
 }
@@ -1582,6 +1600,7 @@ function chooseBridgeTarget(targetsOrPromise, baseURL, fileInfo = null) {
         explanation.setAttribute('role', 'status');
         explanation.setAttribute('aria-live', 'polite');
         const select = document.createElement('select');
+        select.className = 'aria2helper-bridge-target-select';
         select.setAttribute('aria-label', '下载目标');
         select.hidden = true;
         select.disabled = true;
