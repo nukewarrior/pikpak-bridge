@@ -359,6 +359,34 @@ test('multiple targets present a dialog with server-provided names; selected ID 
     assert.equal(doc.listeners.size,0);
 });
 
+test('Bridge target dropdown keeps a light palette regardless of host select styles', async () => {
+    const {ctx} = createHarness(() => {});
+    const css = evaluate(ctx, 'BRIDGE_TARGET_STYLE');
+    const selector = '.aria2helper-bridge-overlay .aria2helper-bridge-dialog select.aria2helper-bridge-target-select';
+    assert.ok(css.includes(selector + ' {'));
+    for(const declaration of [
+        'color-scheme: light !important;',
+        'background: #fff !important;',
+        'color: #222 !important;',
+        'border: 1px solid #aaa !important;'
+    ]) {
+        assert.ok(css.includes(declaration), 'target selector must override site theme: ' + declaration);
+    }
+    assert.ok(css.includes(selector + ' option {'), 'native option labels need the same palette');
+    assert.ok(css.includes(selector + ':focus-visible {'), 'keyboard focus remains visible');
+
+    const doc = fakeDocument();
+    ctx.document = doc;
+    ctx.targets = [{id:'movies',name:'Movies'},{id:'tv',name:'TV'}];
+    const choosing = evaluate(ctx, "chooseBridgeTarget(targets, 'https://bridge.example.test/base')");
+    const dialog = doc.body.children[0].children[0];
+    const select = dialog.children[2];
+    assert.equal(select.className, 'aria2helper-bridge-target-select');
+    assert.equal(select.value, 'movies');
+    dialog.children[3].children[0].onclick();
+    assert.equal(await choosing, null);
+});
+
 test('cancelling target dialog does not create Bridge task', async () => {
     const {ctx, requests, storage} = createHarness(req => respondWithTorrent(req, request => request.onload({
         status:200,responseText:JSON.stringify({targets:[{id:'a'},{id:'b'}]})
